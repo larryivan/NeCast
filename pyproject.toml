@@ -21,6 +21,7 @@ classifiers = [
 # generator writes beside every dataset.
 dependencies = [
     "msprime>=1.3",
+    "numba>=0.59",
     "numpy>=1.26",
     "pandas>=2.0",
 ]

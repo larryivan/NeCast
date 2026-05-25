@@ -102,3 +102,6 @@ maps/**/script/__pycache__/
 !maps/**/output/**/*.bed
 !maps/**/*.md
 dlcoalsim.egg-info/
+
+# Files the necast package ships
+!necast/weights/*.pt

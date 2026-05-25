@@ -1,8 +1,10 @@
+from pathlib import Path
+
 import numpy as np
 import torch
 
 from necast import network
-from necast.window import WINDOW_BP
+from necast.window import WINDOW_BP, Window
 
 NET = network.load()
 
@@ -43,3 +45,11 @@ def test_map_exposure_of_flat_maps():
     # rate inside a region: a difference of float32 running sums, as in training
     np.testing.assert_allclose(e[:-1, 4], np.log1p(1e6 * 1e-8 * network.REGION), rtol=1e-3)
     np.testing.assert_allclose(e[:-1, 7], np.log1p(1e6 * 2e-8 * network.REGION), rtol=1e-3)
+
+
+def test_reproduces_a_published_prediction():
+    """The first window of benchmark history EMP_CEU, setting b (see scripts/make_example.py)."""
+    z = np.load(Path(__file__).parent / "data" / "benchmark_window.npz")
+    w = Window("1", np.array([[0, WINDOW_BP]]), z["positions"].astype(np.int64), z["states"],
+               (z["rec_breaks"], z["rec_rates"]), (z["mut_breaks"], z["mut_rates"]))
+    assert np.abs(NET.estimate(w, threads=4) - z["prediction"]).max() < 1e-5

@@ -44,7 +44,7 @@ dlcoalsim = "simulator.cli:main"
 include = ["necast*", "simulator*"]
 
 [tool.setuptools.package-data]
-necast = ["weights/*.pt"]
+necast = ["weights/*.pt", "example/*"]
 simulator = [
     "assets/maps/*.bed",
     "assets/templates/human_ne/*",

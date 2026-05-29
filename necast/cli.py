@@ -1,6 +1,7 @@
 """The necast command.
 
     necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out results
+    necast example
 """
 
 import argparse
@@ -14,6 +15,8 @@ import torch
 
 from necast import __version__, maps, network, report, window
 
+EXAMPLE = Path(__file__).parent / "example"
+EXAMPLE_MU = 8.34e-9                      # mean mutation rate of the simulated example window
 NOT_AUTOSOMES = {"X", "Y", "M", "MT"}
 
 
@@ -41,10 +44,15 @@ def main(argv=None):
     p.add_argument("--generation-time", type=float, help="years per generation, to give times in years as well")
     p.add_argument("--threads", type=int, default=cpus(), help=f"CPU threads (default: all, here {cpus()})")
 
+    p = commands.add_parser("example", help="run NeCast on the example data that comes with it",
+                            description="Run NeCast on one simulated window of 32 individuals whose history is known.")
+    p.add_argument("--out", default="necast-example", help="folder for the results (default: necast-example)")
+    p.add_argument("--threads", type=int, default=cpus(), help=f"CPU threads (default: all, here {cpus()})")
+
     args = vars(parser.parse_args(argv))
-    args.pop("command")
+    command = args.pop("command")
     try:
-        run(**args)
+        (run if command == "run" else example)(**args)
     except InputError as e:
         sys.exit(f"necast: {e}")
 
@@ -98,6 +106,26 @@ def run(vcf, mask, out, mu=None, rec_rate=None, rec_map=None, mut_map=None, samp
     mean = report.write(out, results, generation_time, truth)
     log(f"done: {plural(len(results) // len(groups), 'window')}; results in {out}: necast.tsv, windows.tsv, necast.png")
     return mean
+
+
+def example(out="necast-example", threads=None):
+    """Run NeCast on the example data: one simulated window of 32 individuals."""
+    print(f"The example is a simulated window of 32 individuals with a known history. Running it is the same\n"
+          f"as running, in {EXAMPLE}:\n\n"
+          f"  necast run example.vcf.gz --mask mask.bed --rec-map recombination.bed.gz \\\n"
+          f"      --mut-map mutation.bed.gz --mu {EXAMPLE_MU} --out {Path(out).resolve()}\n")
+    truth = np.log10(np.loadtxt(EXAMPLE / "truth.tsv", skiprows=1, usecols=1))
+    mean = run(EXAMPLE / "example.vcf.gz", EXAMPLE / "mask.bed", out, mu=EXAMPLE_MU,
+               rec_map=EXAMPLE / "recombination.bed.gz", mut_map=EXAMPLE / "mutation.bed.gz", threads=threads,
+               truth=truth)
+    expected = np.log10(np.loadtxt(EXAMPLE / "expected.tsv", skiprows=1, usecols=3))
+    print(f"\nError against the true history: {np.sqrt(np.mean((mean - truth) ** 2)):.3f} "
+          "(root mean square difference of log10 Ne over the 64 intervals).")
+    difference = np.abs(mean - expected).max()
+    if difference < 1e-4:
+        print("NeCast works: the estimate matches the one in necast/example/expected.tsv.")
+    else:
+        print(f"Warning: the estimate differs from necast/example/expected.tsv by up to {difference:.2g} in log10 Ne.")
 
 
 def open_vcf(path, samples):

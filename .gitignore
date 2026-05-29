@@ -105,3 +105,4 @@ dlcoalsim.egg-info/
 
 # Files the necast package ships
 !necast/weights/*.pt
+!necast/example/*

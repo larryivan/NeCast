@@ -14,15 +14,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from simulator.config import Config
-import simulator.empirical_maps as empirical_maps_module
-import simulator.map_cache as map_cache_module
-from simulator.empirical_maps import (
+from necast.simulator.config import Config
+import necast.simulator.empirical_maps as empirical_maps_module
+import necast.simulator.map_cache as map_cache_module
+from necast.simulator.empirical_maps import (
     PiecewiseRateMap,
     load_empirical_maps,
     load_empirical_rate_table,
 )
-from simulator.map_cache import (
+from necast.simulator.map_cache import (
     ARRAY_FIELDS,
     CACHE_ENV_VAR,
     CACHE_SCHEMA,

@@ -6,11 +6,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from simulator import shards
-from simulator.config import DEMOGRAPHY_PROB_FIELDS, Config, validate_config
-from simulator.dataset_state import DatasetConfigMismatchError
-from simulator.empirical_maps import EmpiricalMapStore
-from simulator.shards import (
+from necast.simulator import shards
+from necast.simulator.config import DEMOGRAPHY_PROB_FIELDS, Config, validate_config
+from necast.simulator.dataset_state import DatasetConfigMismatchError
+from necast.simulator.empirical_maps import EmpiricalMapStore
+from necast.simulator.shards import (
     DatasetGenerationLockedError,
     DatasetSourceUnavailableError,
     UnsafeOutputDirectoryError,
@@ -18,7 +18,7 @@ from simulator.shards import (
     generate_dataset,
     reuse_completed_dataset_if_compatible,
 )
-from simulator.stdpopsim_support import StdpopsimSimulationError
+from necast.simulator.stdpopsim_support import StdpopsimSimulationError
 
 
 def _config(out_dir: Path, *, force: bool = False) -> Config:

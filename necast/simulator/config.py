@@ -587,7 +587,7 @@ def validate_config(cfg: Config) -> None:
     protected_output_dirs = {
         Path(out_dir.anchor).resolve(),
         Path.home().resolve(),
-        Path(__file__).resolve().parents[1],
+        Path(__file__).resolve().parents[2],
     }
     if out_dir in protected_output_dirs:
         raise ValueError(

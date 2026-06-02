@@ -482,8 +482,8 @@ def _runtime_probe(
     if not generator_python.is_file():
         raise ReplacementPlanError(f"generator Python does not exist: {generator_python}")
     code = (
-        "import json, pathlib, simulator;"
-        "from simulator.shards import (_canonical_json_sha256,"
+        "import json, pathlib, necast.simulator as simulator;"
+        "from necast.simulator.shards import (_canonical_json_sha256,"
         "_generation_runtime_state,_runtime_fingerprint_payload);"
         "state=_generation_runtime_state();"
         "print(json.dumps({'simulator_file':str(pathlib.Path(simulator.__file__).resolve()),"
@@ -525,7 +525,7 @@ def _run_generator_subprocess(
 ) -> subprocess.CompletedProcess[str]:
     command = [str(generator_python)]
     if module:
-        command.extend(["-m", "simulator"])
+        command.extend(["-m", "necast.simulator"])
     command.extend(str(value) for value in arguments)
     environment = dict(os.environ)
     old_pythonpath = environment.get("PYTHONPATH")

@@ -38,14 +38,14 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 necast = "necast.cli:main"
-dlcoalsim = "simulator.cli:main"
+dlcoalsim = "necast.simulator.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["necast*", "simulator*"]
+include = ["necast*"]
 
 [tool.setuptools.package-data]
 necast = ["weights/*.pt", "example/*"]
-simulator = [
+"necast.simulator" = [
     "assets/maps/*.bed",
     "assets/templates/human_ne/*",
     "assets/templates/stdpopsim_single_pop/*",

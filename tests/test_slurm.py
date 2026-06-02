@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from simulator.slurm import (
+from necast.simulator.slurm import (
     SlurmEnvironmentError,
     allocated_cpu_count,
     distributed_context,
     slurm_array_context,
     slurm_cpu_count,
 )
-from simulator.utils import resolve_workers
+from necast.simulator.utils import resolve_workers
 
 
 def test_slurm_cpu_allocation_and_explicit_override() -> None:

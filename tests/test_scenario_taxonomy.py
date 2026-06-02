@@ -21,13 +21,13 @@ import dataclasses
 import numpy as np
 import pytest
 
-from simulator.config import (
+from necast.simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     NE_BOUNDS,
     NE_LOG10_BOUNDS,
     Config,
 )
-from simulator.demography import (
+from necast.simulator.demography import (
     DEMO_PROB_FIELDS,
     DEMO_SAMPLERS,
     _canonical_smcpp_sawtooth,
@@ -35,8 +35,8 @@ from simulator.demography import (
     sample_custom_demography,
     trajectory_shape_values,
 )
-from simulator.utils import bin_average_log10_ne, time_grid
-from simulator.stdpopsim_templates import (
+from necast.simulator.utils import bin_average_log10_ne, time_grid
+from necast.simulator.stdpopsim_templates import (
     drawable_stdpopsim_templates,
     load_stdpopsim_templates,
 )
@@ -401,7 +401,7 @@ def test_every_recipe_id_names_a_live_sampler() -> None:
     zero, and every one of them is a sampler this generator still has.
     """
 
-    from simulator.config import GENERATOR_RECIPE_IDS
+    from necast.simulator.config import GENERATOR_RECIPE_IDS
 
     assert set(GENERATOR_RECIPE_IDS) == set(DEMO_SAMPLERS) | {"stdpopsim"}
     assert sorted(GENERATOR_RECIPE_IDS.values()) == list(
@@ -666,7 +666,7 @@ def test_the_catalogue_holds_every_model_again() -> None:
     literature reports error against.
     """
 
-    from simulator.stdpopsim_templates import CATALOGUE_EXCLUSIONS
+    from necast.simulator.stdpopsim_templates import CATALOGUE_EXCLUSIONS
 
     drawable = {t.model_id for t in drawable_stdpopsim_templates(Config())}
     assert "Zigzag_1S14" in drawable
@@ -732,9 +732,9 @@ def test_every_sampler_parameter_reaches_the_shard_row() -> None:
 
     import dataclasses
 
-    from simulator.config import SOURCE_PROB_FIELDS, apply_preset, validate_config
-    from simulator.sample import simulate_one
-    from simulator.shards import _metadata_row
+    from necast.simulator.config import SOURCE_PROB_FIELDS, apply_preset, validate_config
+    from necast.simulator.sample import simulate_one
+    from necast.simulator.shards import _metadata_row
 
     cfg = apply_preset(Config(preset="full_v01"))
     cfg = dataclasses.replace(
@@ -777,9 +777,9 @@ def test_the_held_out_flag_survives_to_disk() -> None:
 
     import dataclasses
 
-    from simulator.config import SOURCE_PROB_FIELDS, apply_preset, validate_config
-    from simulator.sample import simulate_one
-    from simulator.shards import _metadata_row
+    from necast.simulator.config import SOURCE_PROB_FIELDS, apply_preset, validate_config
+    from necast.simulator.sample import simulate_one
+    from necast.simulator.shards import _metadata_row
 
     def row_for(recipe: str, seed: int) -> dict:
         cfg = apply_preset(Config(preset="full_v01"))

@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from simulator import replacement
-from simulator.config import Config
-from simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION, generation_config_state
+from necast.simulator import replacement
+from necast.simulator.config import Config
+from necast.simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION, generation_config_state
 
 
 def _canonical(value: object) -> str:
@@ -244,7 +244,7 @@ def test_prepare_freezes_deficit_tail_and_immutable_runtime(
         replacement,
         "_runtime_probe",
         lambda root, python: {
-            "simulator_file": str(root / "simulator" / "__init__.py"),
+            "simulator_file": str(root / "necast" / "simulator" / "__init__.py"),
             "runtime_environment_sha256": runtime,
         },
     )
@@ -322,7 +322,7 @@ def test_zero_deficit_is_a_safe_noop(
         replacement,
         "_runtime_probe",
         lambda root, python: {
-            "simulator_file": str(root / "simulator" / "__init__.py"),
+            "simulator_file": str(root / "necast" / "simulator" / "__init__.py"),
             "runtime_environment_sha256": runtime,
         },
     )
@@ -368,7 +368,7 @@ def test_prepare_rejects_wrong_generator_runtime(
         replacement,
         "_runtime_probe",
         lambda root, python: {
-            "simulator_file": str(root / "simulator" / "__init__.py"),
+            "simulator_file": str(root / "necast" / "simulator" / "__init__.py"),
             "runtime_environment_sha256": "0" * 64,
         },
     )

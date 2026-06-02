@@ -1,6 +1,6 @@
 """Fail-closed completion-ordered replacement candidate pools.
 
-This controller is deliberately distinct from :mod:`simulator.replacement`.
+This controller is deliberately distinct from :mod:`necast.simulator.replacement`.
 The v1 controller prepares exactly K replacement simulations and publishes an
 ordinary completed generator root.  This v2 controller instead prepares a
 fixed pool of C >= K one-sample fragments, lets independent array ranks finish

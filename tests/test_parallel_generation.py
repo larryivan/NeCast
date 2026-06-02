@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 
-from simulator.config import Config, DEMOGRAPHY_PROB_FIELDS, validate_config
-from simulator.empirical_maps import EmpiricalMapStore, PiecewiseRateMap
-from simulator.shards import generate_dataset
+from necast.simulator.config import Config, DEMOGRAPHY_PROB_FIELDS, validate_config
+from necast.simulator.empirical_maps import EmpiricalMapStore, PiecewiseRateMap
+from necast.simulator.shards import generate_dataset
 
 
 def _empirical_store() -> EmpiricalMapStore:

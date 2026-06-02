@@ -77,7 +77,7 @@ def _assert_safe_output_directory(output: Path) -> None:
     protected = {
         Path(resolved.anchor).resolve(),
         Path.home().resolve(),
-        Path(__file__).resolve().parents[1],
+        Path(__file__).resolve().parents[2],
     }
     if resolved in protected:
         raise UnsafeOutputDirectoryError(

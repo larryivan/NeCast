@@ -22,15 +22,15 @@ import dataclasses
 import numpy as np
 import pytest
 
-from simulator.config import NE_LOG10_BOUNDS, Config
-from simulator.demography import (
+from necast.simulator.config import NE_LOG10_BOUNDS, Config
+from necast.simulator.demography import (
     DEMO_PROB_FIELDS,
     SPECTRAL_RANGE_CAP,
     SPECTRAL_TV_CAP,
     sample_custom_demography,
     spectral_walk_curve,
 )
-from simulator.utils import bin_average_log10_ne, time_grid
+from necast.simulator.utils import bin_average_log10_ne, time_grid
 
 
 ANCHOR_TURNS = (6, 9, 13)
@@ -307,10 +307,10 @@ def test_a_generated_row_replays_exactly_from_its_metadata_alone(tmp_path) -> No
 
     import numpy as np
 
-    from simulator.config import SOURCE_PROB_FIELDS, validate_config
-    from simulator.empirical_maps import EmpiricalMapStore
-    from simulator.shards import generate_dataset
-    from simulator.utils import bin_average_log10_ne, time_grid
+    from necast.simulator.config import SOURCE_PROB_FIELDS, validate_config
+    from necast.simulator.empirical_maps import EmpiricalMapStore
+    from necast.simulator.shards import generate_dataset
+    from necast.simulator.utils import bin_average_log10_ne, time_grid
 
     cfg = _only_spectral(
         dataset_name="spectral-replay",

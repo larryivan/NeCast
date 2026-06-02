@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from simulator.config import Config
-from simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION, generation_config_state
-from simulator import replacement as v1
-from simulator import replacement_pool as pool
+from necast.simulator.config import Config
+from necast.simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION, generation_config_state
+from necast.simulator import replacement as v1
+from necast.simulator import replacement_pool as pool
 
 
 GENERATION_PLAN_SHA = "9" * 64
@@ -121,7 +121,7 @@ def _patch_generator(
         v1,
         "_runtime_probe",
         lambda root, python: {
-            "simulator_file": str(root / "simulator" / "__init__.py"),
+            "simulator_file": str(root / "necast" / "simulator" / "__init__.py"),
             "runtime_environment_sha256": runtime_sha256,
         },
     )
@@ -173,8 +173,8 @@ def _prepare(
         monkeypatch, output, source_plan["runtime_environment_sha256"]
     )
     generator_root = tmp_path / f"{name}-generator"
-    (generator_root / "simulator").mkdir(parents=True)
-    (generator_root / "simulator" / "__init__.py").write_text("")
+    (generator_root / "necast" / "simulator").mkdir(parents=True)
+    (generator_root / "necast" / "simulator" / "__init__.py").write_text("")
     generator_python = tmp_path / f"{name}-python"
     generator_python.write_text("")
     plan = pool.prepare_pool(

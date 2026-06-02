@@ -12,17 +12,17 @@ from pathlib import Path
 import numpy as np
 
 from scripts.dataset_admin import check_shard
-from simulator.config import (
+from necast.simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     DEMOGRAPHY_TYPE_IDS,
     GENERATOR_RECIPE_IDS,
     Config,
     validate_config,
 )
-from simulator.dataset_files import write_dataset_files
-from simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
-from simulator.empirical_maps import EmpiricalMapStore
-from simulator.shards import _write_npz_arrays, generate_dataset
+from necast.simulator.dataset_files import write_dataset_files
+from necast.simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
+from necast.simulator.empirical_maps import EmpiricalMapStore
+from necast.simulator.shards import _write_npz_arrays, generate_dataset
 
 
 def _config(

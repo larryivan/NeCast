@@ -9,7 +9,7 @@ import msprime
 import numpy as np
 import pytest
 
-from simulator.config import (
+from necast.simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     DEMOGRAPHY_TYPE_IDS,
     GENERATOR_RECIPE_IDS,
@@ -19,7 +19,7 @@ from simulator.config import (
     SOURCE_PROB_FIELDS,
     Config,
 )
-from simulator.demography import (
+from necast.simulator.demography import (
     DEMO_PROB_FIELDS,
     DEMO_SAMPLERS,
     _canonical_smcpp_sawtooth,
@@ -33,14 +33,14 @@ from simulator.demography import (
     sample_custom_demography,
     summarize_demography,
 )
-from simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
-from simulator.sample import simulate_one
-from simulator.stdpopsim_support import (
+from necast.simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
+from necast.simulator.sample import simulate_one
+from necast.simulator.stdpopsim_support import (
     StdpopsimSimulationError,
     _extract_single_population_trajectory,
     try_stdpopsim_sample,
 )
-from simulator.utils import bin_average_log10_ne, time_grid
+from necast.simulator.utils import bin_average_log10_ne, time_grid
 
 
 def _only_demography(name: str, *, time_bins: int = 48) -> Config:

@@ -15,13 +15,13 @@ import dataclasses
 import numpy as np
 import pytest
 
-from simulator.config import (
+from necast.simulator.config import (
     SOURCE_PROB_FIELDS,
     Config,
     apply_preset,
     validate_config,
 )
-from simulator.noise import add_false_variants, noise_params_for_sample
+from necast.simulator.noise import add_false_variants, noise_params_for_sample
 
 
 def _config(**overrides) -> Config:
@@ -100,8 +100,8 @@ def test_invented_sites_are_recorded_on_the_row() -> None:
 
     import dataclasses as dc
 
-    from simulator.sample import simulate_one
-    from simulator.shards import _metadata_row
+    from necast.simulator.sample import simulate_one
+    from necast.simulator.shards import _metadata_row
 
     cfg = _config()
     sample = simulate_one(
@@ -118,7 +118,7 @@ def test_invented_sites_are_recorded_on_the_row() -> None:
 
 
 def _correlation_by_scale(cfg: Config, seeds: int = 40) -> dict[int, float]:
-    from simulator.sample import simulate_one
+    from necast.simulator.sample import simulate_one
 
     def rebin(pos, rate, edges):
         cumulative = np.concatenate(([0.0], np.cumsum(rate * np.diff(pos))))
@@ -199,7 +199,7 @@ def test_the_mutation_map_survives_its_own_observation_noise() -> None:
     cfg.p_custom_hetero = 1.0
     validate_config(cfg)
 
-    from simulator.sample import simulate_one
+    from necast.simulator.sample import simulate_one
 
     def rebin(pos, rate, edges):
         cumulative = np.concatenate(([0.0], np.cumsum(rate * np.diff(pos))))

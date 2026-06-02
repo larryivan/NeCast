@@ -30,9 +30,9 @@ import inspect
 import numpy as np
 import pytest
 
-from simulator.config import Config, apply_preset
-from simulator.empirical_maps import EmpiricalMapStore
-from simulator.maps import (
+from necast.simulator.config import Config, apply_preset
+from necast.simulator.empirical_maps import EmpiricalMapStore
+from necast.simulator.maps import (
     HOTSPOT_WIDTH_BP,
     MAX_SYNTHETIC_RATE_MULTIPLIER,
     sample_maps_for_source,
@@ -339,7 +339,7 @@ def test_the_hotspot_dropout_only_applies_where_hotspots_exist() -> None:
         # Checked against the flag itself rather than against a threshold on
         # the values: with hotspots the dropout fires and changes the map,
         # without them it must be inert.
-        from simulator.maps import _observed_view
+        from necast.simulator.maps import _observed_view
 
         pos_a, rates_a, _, _, _ = _draw(False, seed=seed)
         quiet = _observed_view(

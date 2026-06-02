@@ -3,8 +3,8 @@ from __future__ import annotations
 import dataclasses
 import unittest
 
-from simulator.config import Config
-from simulator.dataset_state import (
+from necast.simulator.config import Config
+from necast.simulator.dataset_state import (
     DONE_CONFIG_STATE_KEY,
     RUNTIME_CONFIG_FIELDS,
     DatasetConfigMismatchError,

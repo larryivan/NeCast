@@ -9,15 +9,15 @@ from typing import Any
 import numpy as np
 import pytest
 
-import simulator.noise as noise_module
-import simulator.sample as sample_module
-from simulator.config import (
+import necast.simulator.noise as noise_module
+import necast.simulator.sample as sample_module
+from necast.simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     SOURCE_PROB_FIELDS,
     Config,
     validate_config,
 )
-from simulator.noise import apply_genotype_noise, pack_haplotypes
+from necast.simulator.noise import apply_genotype_noise, pack_haplotypes
 
 
 def _reference_apply_phase_switch_errors(

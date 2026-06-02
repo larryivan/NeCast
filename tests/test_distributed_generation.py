@@ -10,11 +10,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from simulator import shards
-from simulator.config import DEMOGRAPHY_PROB_FIELDS, Config, validate_config
-from simulator.dataset_state import DatasetConfigMismatchError
-from simulator.empirical_maps import EmpiricalMapStore, PiecewiseRateMap
-from simulator.shards import (
+from necast.simulator import shards
+from necast.simulator.config import DEMOGRAPHY_PROB_FIELDS, Config, validate_config
+from necast.simulator.dataset_state import DatasetConfigMismatchError
+from necast.simulator.empirical_maps import EmpiricalMapStore, PiecewiseRateMap
+from necast.simulator.shards import (
     DatasetGenerationIncompleteError,
     finalize_dataset,
     generate_dataset,

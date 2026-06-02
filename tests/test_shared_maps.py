@@ -4,10 +4,10 @@ import dataclasses
 
 import numpy as np
 
-from simulator.config import Config
-from simulator.empirical_maps import EmpiricalMapStore, PiecewiseRateMap
-from simulator.sample import _close_worker_shared_maps, _get_worker_empirical, init_worker
-from simulator.shared_maps import (
+from necast.simulator.config import Config
+from necast.simulator.empirical_maps import EmpiricalMapStore, PiecewiseRateMap
+from necast.simulator.sample import _close_worker_shared_maps, _get_worker_empirical, init_worker
+from necast.simulator.shared_maps import (
     attach_shared_empirical_map_store,
     create_shared_empirical_map_store,
     release_shared_memory,

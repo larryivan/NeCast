@@ -5,7 +5,7 @@ import dataclasses
 import numpy as np
 import pytest
 
-from simulator.config import (
+from necast.simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     FLOAT32_MIN_POSITIVE,
     INT16_MAX,
@@ -15,7 +15,7 @@ from simulator.config import (
     apply_preset,
     validate_config,
 )
-from simulator.noise import flat_index_dtype
+from necast.simulator.noise import flat_index_dtype
 
 
 def valid_config() -> Config:

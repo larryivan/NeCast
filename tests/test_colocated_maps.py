@@ -3,15 +3,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import simulator.empirical_maps as empirical_maps_module
-from simulator.config import Config
-from simulator.empirical_maps import (
+import necast.simulator.empirical_maps as empirical_maps_module
+from necast.simulator.config import Config
+from necast.simulator.empirical_maps import (
     EmpiricalMapStore,
     PiecewiseRateMap,
     load_empirical_rate_table,
     slice_piecewise_map,
 )
-from simulator.maps import sample_maps_for_source
+from necast.simulator.maps import sample_maps_for_source
 
 
 def _rate_map(chrom: str, positions: list[float], rates: list[float]) -> PiecewiseRateMap:
@@ -235,8 +235,8 @@ def test_every_autosome_can_supply_the_production_slice_from_measured_map() -> N
     set sees away from the one the model will be applied to.
     """
 
-    from simulator.config import apply_preset
-    from simulator.empirical_maps import load_empirical_maps
+    from necast.simulator.config import apply_preset
+    from necast.simulator.empirical_maps import load_empirical_maps
 
     cfg = apply_preset(Config(preset="full_v01"))
     store = load_empirical_maps(cfg)

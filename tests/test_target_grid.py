@@ -11,15 +11,15 @@ import msprime
 import numpy as np
 import pytest
 
-from simulator.config import (
+from necast.simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     SOURCE_PROB_FIELDS,
     Config,
     apply_preset,
     validate_config,
 )
-from simulator.dataset_files import write_dataset_files
-from simulator.demography import (
+from necast.simulator.dataset_files import write_dataset_files
+from necast.simulator.demography import (
     DEMO_PROB_FIELDS,
     DEMO_SAMPLERS,
     _clean_demography,
@@ -27,9 +27,9 @@ from simulator.demography import (
     sample_custom_demography,
     spectral_walk_curve,
 )
-from simulator.sample import simulate_one
-from simulator.stdpopsim_support import try_stdpopsim_sample
-from simulator.utils import bin_average_log10_ne, time_grid
+from necast.simulator.sample import simulate_one
+from necast.simulator.stdpopsim_support import try_stdpopsim_sample
+from necast.simulator.utils import bin_average_log10_ne, time_grid
 
 
 def _only_demography(
@@ -498,7 +498,7 @@ def test_the_stored_genealogy_summary_reconstructs_the_coalescence_rate(
 
     import msprime
 
-    from simulator.sample import genealogy_summary
+    from necast.simulator.sample import genealogy_summary
 
     edges, _ = time_grid(Config())
     windows = np.concatenate(([0.0], edges, [np.inf]))
@@ -545,7 +545,7 @@ def test_the_genealogy_summary_is_per_unit_sequence() -> None:
 
     import msprime
 
-    from simulator.sample import genealogy_summary
+    from necast.simulator.sample import genealogy_summary
 
     edges, _ = time_grid(Config())
     summaries = {}

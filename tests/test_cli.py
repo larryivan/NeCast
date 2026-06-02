@@ -4,11 +4,11 @@ import sys
 
 import pytest
 
-from simulator import cli
-from simulator.config import Config
-from simulator.dataset_state import DatasetConfigMismatchError
-from simulator.empirical_maps import EmpiricalMapStore
-from simulator.shards import (
+from necast.simulator import cli
+from necast.simulator.config import Config
+from necast.simulator.dataset_state import DatasetConfigMismatchError
+from necast.simulator.empirical_maps import EmpiricalMapStore
+from necast.simulator.shards import (
     DatasetGenerationIncompleteError,
     DatasetGenerationLockedError,
     dataset_output_lock,

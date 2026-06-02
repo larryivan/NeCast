@@ -17,23 +17,20 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
-# msprime carries tskit and numpy.  pandas is used for the metadata tables the
-# generator writes beside every dataset.
 dependencies = [
-    "cyvcf2>=0.30",
-    "matplotlib>=3.7",
-    "msprime>=1.3",
-    "numba>=0.59",
-    "numpy>=1.26",
-    "pandas>=2.0",
-    "torch>=2.1",
+    "cyvcf2>=0.31",
+    "matplotlib>=3.9",
+    "numba>=0.60",
+    "numpy>=2",
+    "torch>=2.3",
 ]
 
 [project.optional-dependencies]
-# Needed only to rebuild the frozen assets, never to use them.  The eighteen
-# held-out catalogue trajectories and the recombination map ship in the
-# package; these pull in the tools that produced them.
-build-assets = ["stdpopsim>=0.3", "pyBigWig>=0.3"]
+# necast simulate. msprime 1.4.2 made the published simulations; pandas writes
+# the metadata tables beside every dataset.
+simulate = ["msprime==1.4.2", "pandas>=2.0", "tqdm>=4.60"]
+# Only to rebuild the shipped maps and histories, never to use them.
+build-assets = ["stdpopsim==0.3.0", "pyBigWig>=0.3"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
@@ -61,3 +58,4 @@ include = ["necast*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

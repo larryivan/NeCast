@@ -99,8 +99,8 @@ GENERATOR_RECIPE_HISTORY_FAMILY_OVERRIDES = {
 # at the scale that breaks haplotype tracts -- its crossover column is this
 # same map re-binned.  Kept beside it for the megabase-scale non-crossover
 # information, which is a different quantity.
-# Paths are resolved against ``simulator/assets`` first and the working
-# directory second, so an installed copy finds its own data from anywhere.
+# A relative path is looked up in the working directory first and in
+# ``necast/third_party`` second, so an installed copy finds its own data.
 DEFAULT_RECOMB_MAP = "maps/decode2019_avg_hg38.bed"
 DEFAULT_MUT_MAP = "maps/roulette_2023_autosomes_hg38_1000bp.bed"
 
@@ -284,9 +284,9 @@ class Config:
     p_stdpopsim_single_pop: float = 0.024
 
 
-    empirical_ne_template_dir: str = "templates/human_ne"
+    empirical_ne_template_dir: str = "histories/human_ne"
     stdpopsim_template_path: str = (
-        "templates/stdpopsim_single_pop/trajectories.csv"
+        "histories/stdpopsim_single_pop/trajectories.csv"
     )
     empirical_ne_template_source_mix: str = "smcpp_1kg:0.25,phlash_unified:0.60,phlash_super:0.10,msmc2_example:0.04,msmc_im_example:0.01"
     # The templates are 191 curves whose levels all sit within about half a

@@ -1562,7 +1562,8 @@ def _stdpopsim_single_pop(rng: np.random.Generator, cfg: Config, edges: np.ndarr
     if template is None:
         raise ValueError(
             "stdpopsim single-population templates are unavailable; run "
-            "scripts/build_stdpopsim_single_pop.py or set p_stdpopsim_single_pop to 0"
+            "necast/third_party/histories/build_stdpopsim_single_pop.py or set "
+            "p_stdpopsim_single_pop to 0"
         )
     return list(template.breaks), list(template.values), {
         "demography_function": "piecewise_exponential_linear_time",

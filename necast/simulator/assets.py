@@ -7,10 +7,10 @@ than the repository root it found no templates at all and reported an empty
 catalogue rather than an error, so the eighteen held-out cross-species models
 simply were not there.
 
-Everything the simulator needs to run ships inside the package, so a path is
-resolved against the package first and the working directory second.  That
-order is what makes an installed copy work from anywhere; the reverse order
-would let a stray directory name shadow the shipped data.
+Everything the simulator needs to run ships inside the package, in
+``necast/third_party``.  A relative path is looked up in the working directory
+first, so a user's own file wins, and in ``necast/third_party`` second, which
+is what makes an installed copy work from anywhere.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 
 # The directory this package's data lives in.  Kept as one constant so a move
 # is one edit rather than a search.
-ASSET_ROOT = Path(__file__).resolve().parent / "assets"
+ASSET_ROOT = Path(__file__).resolve().parents[1] / "third_party"
 
 
 def asset_path(relative: str) -> Path:
@@ -43,8 +43,4 @@ def asset_path(relative: str) -> Path:
     packaged = ASSET_ROOT / candidate
     if packaged.exists():
         return packaged
-    # Legacy layout: assets used to sit at the repository root.
-    repository = Path(__file__).resolve().parents[1] / candidate
-    if repository.exists():
-        return repository
     return candidate

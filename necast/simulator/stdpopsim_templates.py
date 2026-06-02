@@ -6,9 +6,9 @@ published by other people for other reasons, rather than against our own prior
 re-drawn -- which measures nothing.  phlash validates the same way, on twelve
 stdpopsim models across eight species.
 
-The trajectories are frozen into ``data/templates/stdpopsim_single_pop`` by
-``scripts/build_stdpopsim_single_pop.py`` rather than imported at runtime; the
-reasons are in that script's docstring.
+The trajectories are frozen into ``necast/third_party/histories/stdpopsim_single_pop``
+by ``necast/third_party/histories/build_stdpopsim_single_pop.py`` rather than
+imported at runtime; the reasons are in that script's docstring.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from .assets import asset_path
 from .config import NE_LOG10_BOUNDS, Config
 
 
-DEFAULT_STDPOPSIM_TEMPLATE_PATH = "data/templates/stdpopsim_single_pop/trajectories.csv"
+DEFAULT_STDPOPSIM_TEMPLATE_PATH = "histories/stdpopsim_single_pop/trajectories.csv"
 
 # Models held out of the draw because another recipe produces them.  Empty at
 # present: Zigzag_1S14 had a recipe of its own for a while and was excluded here

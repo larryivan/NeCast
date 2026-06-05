@@ -7,7 +7,7 @@ trajectories are available to every run, on every machine, for the life of the
 project.  A runtime ``import stdpopsim`` makes that depend on which version
 happens to be installed -- the catalogue is versioned and its parameters do get
 corrected -- and makes the generator fail wherever the package is missing.  The
-human Ne templates under ``data/templates/human_ne`` are frozen for the same
+human Ne templates under ``necast/third_party/histories/human_ne`` are frozen for the same
 reason.
 
 What is frozen is the size trajectory of the single population, including its
@@ -16,27 +16,23 @@ skipped: reading one population out of a structured model would silently turn
 migration into size change, which is the one thing this project must not do.
 
 Usage (needs ``pip install stdpopsim``, a build-time dependency only):
-    python scripts/build_stdpopsim_single_pop.py \
-        --out data/templates/stdpopsim_single_pop/trajectories.csv
+    python -m necast.third_party.histories.build_stdpopsim_single_pop
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from simulator.stdpopsim_support import _extract_single_population_trajectory
+from necast.simulator.stdpopsim_support import _extract_single_population_trajectory
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--out",
-        default="data/templates/stdpopsim_single_pop/trajectories.csv",
+        default=str(Path(__file__).resolve().parent / "stdpopsim_single_pop" / "trajectories.csv"),
     )
     return parser.parse_args(argv)
 

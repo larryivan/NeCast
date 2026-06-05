@@ -128,7 +128,7 @@ MSMC-IM:
 The default simulator config points here:
 
 ```text
-empirical_ne_template_dir = "data/templates/human_ne"
+empirical_ne_template_dir = "histories/human_ne"
 ```
 
 The default source mixture is:

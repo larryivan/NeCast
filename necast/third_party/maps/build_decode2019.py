@@ -28,8 +28,8 @@ converts with ``RECOMB_CM_PER_MB_TO_PER_BP`` when ``recomb_map_unit`` is
 file checkable against UCSC.
 
 Usage:
-    python maps/recomb_map/build_decode2019.py --bigwig recombAvg.bw \
-        --out maps/recomb_map/output/decode2019_avg_hg38.bed
+    python -m necast.third_party.maps.build_decode2019 --bigwig recombAvg.bw \
+        --out necast/third_party/maps/decode2019_avg_hg38.bed
 """
 
 from __future__ import annotations

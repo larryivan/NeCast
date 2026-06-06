@@ -35,7 +35,6 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 necast = "necast.cli:main"
-dlcoalsim = "necast.simulator.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["necast*"]

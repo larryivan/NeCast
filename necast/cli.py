@@ -2,6 +2,7 @@
 
     necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out results
     necast example
+    necast simulate --preset mini --out-dir simulations
 """
 
 import argparse
@@ -49,10 +50,16 @@ def main(argv=None):
     p.add_argument("--out", default="necast-example", help="folder for the results (default: necast-example)")
     p.add_argument("--threads", type=int, default=cpus(), help=f"CPU threads (default: all, here {cpus()})")
 
-    args = vars(parser.parse_args(argv))
-    command = args.pop("command")
+    commands.add_parser("simulate", help="simulate windows to train or test NeCast (see necast simulate --help)")
+
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["simulate"]:              # the simulator reads its own options
+        command, args = "simulate", {"args": argv[1:]}
+    else:
+        args = vars(parser.parse_args(argv))
+        command = args.pop("command")
     try:
-        (run if command == "run" else example)(**args)
+        {"run": run, "example": example, "simulate": simulate}[command](**args)
     except InputError as e:
         sys.exit(f"necast: {e}")
 
@@ -126,6 +133,16 @@ def example(out="necast-example", threads=None):
         print("NeCast works: the estimate matches the one in necast/example/expected.tsv.")
     else:
         print(f"Warning: the estimate differs from necast/example/expected.tsv by up to {difference:.2g} in log10 Ne.")
+
+
+def simulate(args):
+    """Run the simulator with its own options (see docs/simulate.md)."""
+    try:
+        from necast.simulator.cli import main as simulator
+    except ModuleNotFoundError as e:
+        raise InputError(f"necast simulate needs {e.name}; install it with:  pip install 'necast[simulate]'")
+    sys.argv = ["necast simulate", *args]
+    simulator()
 
 
 def open_vcf(path, samples):

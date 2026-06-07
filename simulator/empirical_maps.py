@@ -320,28 +320,43 @@ def _summarize_maps(path: str, maps: dict[str, PiecewiseRateMap], requested_unit
     }
 
 
+def _resolve_map_path(path: str) -> Path | None:
+    if not path:
+        return None
+    raw = Path(path).expanduser()
+    if raw.exists():
+        return raw
+    if raw.is_absolute():
+        return None
+    repo_root = Path(__file__).resolve().parents[1]
+    repo_path = repo_root / raw
+    return repo_path if repo_path.exists() else None
+
+
 def load_empirical_maps(cfg: Config) -> EmpiricalMapStore:
     store = EmpiricalMapStore()
-    if cfg.recomb_map and Path(cfg.recomb_map).exists():
-        print(f"[maps] loading empirical recombination map: {cfg.recomb_map}")
+    recomb_path = _resolve_map_path(cfg.recomb_map)
+    mut_path = _resolve_map_path(cfg.mut_map)
+    if recomb_path is not None:
+        print(f"[maps] loading empirical recombination map: {recomb_path}")
         store.rec_maps = load_empirical_rate_table(
-            cfg.recomb_map,
+            str(recomb_path),
             cfg.baseline_rec,
             map_kind="recombination",
             rate_unit=cfg.recomb_map_unit,
             scale_to_baseline=False,
         )
-        store.metadata["recombination"] = _summarize_maps(cfg.recomb_map, store.rec_maps, cfg.recomb_map_unit)
-    if cfg.mut_map and Path(cfg.mut_map).exists():
-        print(f"[maps] loading empirical mutation map: {cfg.mut_map}")
+        store.metadata["recombination"] = _summarize_maps(str(recomb_path), store.rec_maps, cfg.recomb_map_unit)
+    if mut_path is not None:
+        print(f"[maps] loading empirical mutation map: {mut_path}")
         store.mut_maps = load_empirical_rate_table(
-            cfg.mut_map,
+            str(mut_path),
             cfg.baseline_mu,
             map_kind="mutation",
             rate_unit=cfg.mut_map_unit,
             scale_to_baseline=cfg.mut_map_scale_to_baseline,
         )
-        store.metadata["mutation"] = _summarize_maps(cfg.mut_map, store.mut_maps, cfg.mut_map_unit)
+        store.metadata["mutation"] = _summarize_maps(str(mut_path), store.mut_maps, cfg.mut_map_unit)
     return store
 
 

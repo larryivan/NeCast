@@ -47,6 +47,9 @@ DEMO_IDS = {
 }
 ID_TO_DEMO = {v: k for k, v in DEMO_IDS.items()}
 
+DEFAULT_RECOMB_MAP = "maps/recomb_map/output/palsson_2025_autosomes_hg38.bed"
+DEFAULT_MUT_MAP = "maps/mut_map/output/roulette_2023_autosomes_hg38_1000bp.bed"
+
 @dataclass
 class Config:
     dataset_name: str = "DLCoalSim-Core-v0.1"
@@ -116,8 +119,8 @@ class Config:
     observed_map_noise: float = 0.25
     hotspot_missing_prob: float = 0.10
 
-    recomb_map: str = ""
-    mut_map: str = ""
+    recomb_map: str = DEFAULT_RECOMB_MAP
+    mut_map: str = DEFAULT_MUT_MAP
     recomb_map_unit: str = "per_bp"
     mut_map_unit: str = "per_bp"
     mut_map_scale_to_baseline: bool = True

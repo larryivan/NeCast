@@ -140,7 +140,7 @@ def main() -> None:
     explicit_rank = getattr(cfg, "_distributed_rank", None)
     explicit_world_size = getattr(cfg, "_distributed_world_size", None)
     print("=" * 80)
-    print(f"DLCoalSim generator: {cfg.dataset_name}")
+    print(f"NeCast simulator: {cfg.dataset_name}")
     print(f"out_dir={cfg.out_dir}")
     print(
         f"preset={cfg.preset} seq_len={cfg.seq_len:,} H={cfg.n_haplotypes} "

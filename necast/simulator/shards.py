@@ -100,7 +100,7 @@ def _assert_safe_output_directory(output: Path) -> None:
     if not known_output:
         raise UnsafeOutputDirectoryError(
             f"Refusing to write into non-empty directory {resolved} because it has no "
-            "DLCoalSim marker; choose an empty or dedicated dataset directory."
+            "NeCast simulator marker; choose an empty or dedicated dataset directory."
         )
 
 
@@ -133,7 +133,7 @@ def dataset_output_lock(
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError as exc:
                 raise DatasetGenerationLockedError(
-                    f"Another DLCoalSim process is already writing {output}."
+                    f"Another NeCast simulator process is already writing {output}."
                 ) from exc
             acquired = True
         else:
@@ -146,7 +146,7 @@ def dataset_output_lock(
                 fcntl.flock(handle.fileno(), operation)
             except BlockingIOError as exc:
                 raise DatasetGenerationLockedError(
-                    f"Another DLCoalSim process is already writing {output}."
+                    f"Another NeCast simulator process is already writing {output}."
                 ) from exc
             acquired = True
 

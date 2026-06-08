@@ -60,7 +60,7 @@ def test_unknown_preset_is_an_argparse_error_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["dlcoalsim", "--preset", "unknown"])
+    monkeypatch.setattr(sys, "argv", ["necast simulate", "--preset", "unknown"])
 
     with pytest.raises(SystemExit) as exc_info:
         cli.parse_args()
@@ -96,7 +96,7 @@ def test_parse_args_records_distributed_generation_options(
         sys,
         "argv",
         [
-            "dlcoalsim",
+            "necast simulate",
             "--generate-only",
             "--rank",
             "2",

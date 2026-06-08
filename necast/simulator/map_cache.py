@@ -20,8 +20,8 @@ import numpy as np
 import pandas as pd
 
 
-CACHE_SCHEMA = "dlcoalsim.empirical-map-cache.v1"
-CACHE_ENV_VAR = "DLCOALSIM_CACHE_DIR"
+CACHE_SCHEMA = "necast.empirical-map-cache.v1"
+CACHE_ENV_VAR = "NECAST_CACHE_DIR"
 MANIFEST_NAME = "manifest.json"
 # ``measured_runs`` is a (n, 2) array of the spans a source file actually
 # measured.  It rides with the rate arrays rather than the scalars because it is
@@ -63,7 +63,7 @@ class _CacheInputsChanged(MapCacheError):
 
 
 def map_cache_directory() -> Path:
-    """Return the empirical-map cache root, honoring ``DLCOALSIM_CACHE_DIR``."""
+    """Return the empirical-map cache root, honoring ``NECAST_CACHE_DIR``."""
     override = os.environ.get(CACHE_ENV_VAR)
     if override:
         return Path(override).expanduser().resolve(strict=False)
@@ -76,7 +76,7 @@ def map_cache_directory() -> Path:
     else:
         xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
         base = Path(xdg_cache_home).expanduser() if xdg_cache_home else Path.home() / ".cache"
-    return (base / "dlcoalsim" / "empirical-maps").resolve(strict=False)
+    return (base / "necast" / "empirical-maps").resolve(strict=False)
 
 
 def _canonical_json(value: object) -> str:

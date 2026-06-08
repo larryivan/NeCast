@@ -44,6 +44,8 @@ scratch/
 DLCoalSim-*/
 DLCoalSim_Out/
 DLCoalSim-Out/
+necast-simulations/
+necast-example/
 sim_dat/
 outputs/
 datasets/

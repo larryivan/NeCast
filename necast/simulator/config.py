@@ -173,9 +173,9 @@ MAX_BASELINE_RATE = MAX_MSPRIME_RATE / MAX_SYNTHETIC_RATE_MULTIPLIER
 
 @dataclass
 class Config:
-    dataset_name: str = "DLCoalSim-Core-v0.1"
+    dataset_name: str = "NeCast-sim-core-v0.1"
     preset: str = "mini"
-    out_dir: str = "./DLCoalSim-Out"
+    out_dir: str = "./necast-simulations"
     seed: int = 12345
     force: bool = False
     demography_mixture_version: str = "v1"
@@ -416,7 +416,7 @@ class Config:
 
 def apply_preset(cfg: Config) -> Config:
     if cfg.preset == "mini":
-        cfg.dataset_name = "DLCoalSim-Mini"
+        cfg.dataset_name = "NeCast-sim-mini"
         cfg.n_samples = 512
         cfg.shard_size = 32
         cfg.seq_len = 1_000_000
@@ -426,7 +426,7 @@ def apply_preset(cfg: Config) -> Config:
         cfg.enable_stdpopsim = False
         cfg.p_stdpopsim_anchor = 0.0
     elif cfg.preset == "core_v01":
-        cfg.dataset_name = "DLCoalSim-Core-v0.1"
+        cfg.dataset_name = "NeCast-sim-core-v0.1"
         cfg.n_samples = 20_000
         cfg.shard_size = 128
         cfg.seq_len = 10_000_000
@@ -439,7 +439,7 @@ def apply_preset(cfg: Config) -> Config:
         cfg.p_empirical_slice = 0.20
         cfg.p_stdpopsim_anchor = 0.0
     elif cfg.preset == "full_v01":
-        cfg.dataset_name = "DLCoalSim-Full-v0.1"
+        cfg.dataset_name = "NeCast-sim-full-v0.1"
         cfg.n_samples = 100_000
         cfg.shard_size = 128
         # Thirty megabases because that is what every human autosome can supply

@@ -1,5 +1,6 @@
 """The necast command.
 
+    necast run data.vcf.gz --mask accessible.bed --human --out results
     necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out results
     necast example
     necast simulate --preset mini --out-dir simulations
@@ -19,6 +20,11 @@ from necast import __version__, maps, network, report, window
 EXAMPLE = Path(__file__).parent / "example"
 EXAMPLE_MU = 8.34e-9                      # mean mutation rate of the simulated example window
 NOT_AUTOSOMES = {"X", "Y", "M", "MT"}
+THIRD_PARTY = Path(__file__).parent / "third_party"
+HUMAN = {"mu": 1.29e-8,                   # what --human uses unless told otherwise
+         "rec_map": THIRD_PARTY / "maps" / "decode2019_avg_hg38.bed",
+         "mut_map": THIRD_PARTY / "maps" / "roulette_2023_autosomes_hg38_1000bp.bed",
+         "gaps": THIRD_PARTY / "reference" / "grch38_gaps.bed"}
 
 
 class InputError(Exception):
@@ -36,6 +42,9 @@ def main(argv=None):
     p.add_argument("vcf", help="VCF or BCF file, with an index (.tbi or .csi)")
     p.add_argument("--mask", required=True, help="BED file of the accessible sequence")
     p.add_argument("--out", required=True, help="folder for the results")
+    p.add_argument("--human", action="store_true",
+                   help="human data on GRCh38: leave out assembly gaps and centromeres, and unless given otherwise "
+                        "use the deCODE recombination map, the Roulette mutation map and --mu 1.29e-8")
     p.add_argument("--mu", type=float, help="mutation rate per bp per generation")
     p.add_argument("--rec-rate", type=float, help="recombination rate per bp per generation, one for the whole genome")
     p.add_argument("--rec-map", help="BED file of recombination rates in cM/Mb, instead of --rec-rate")
@@ -64,12 +73,16 @@ def main(argv=None):
         sys.exit(f"necast: {e}")
 
 
-def run(vcf, mask, out, mu=None, rec_rate=None, rec_map=None, mut_map=None, samples=None,
+def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_map=None, samples=None,
         chromosomes=None, generation_time=None, threads=None, truth=None):
     """Estimate the size history from a VCF and write the results into the folder `out`.
 
     Returns log10 Ne on the 64 intervals of necast.posterior.GENERATIONS. `truth`,
     the true log10 Ne of simulated data, is only drawn in the figure."""
+    if human:
+        mu = HUMAN["mu"] if mu is None else mu
+        rec_map = HUMAN["rec_map"] if rec_map is None and rec_rate is None else rec_map
+        mut_map = HUMAN["mut_map"] if mut_map is None else mut_map
     if mu is None:
         raise InputError("give the mutation rate per bp per generation with --mu")
     if rec_map is None and rec_rate is None:
@@ -78,6 +91,10 @@ def run(vcf, mask, out, mu=None, rec_rate=None, rec_map=None, mut_map=None, samp
     vcf, groups, sample_count = open_vcf(vcf, samples)
     accessible = window.read_bed(mask)
     names = pick_chromosomes(vcf, accessible, chromosomes)
+    if human:
+        gaps = window.read_bed(HUMAN["gaps"])
+        check_grch38(vcf, names, {name: int(g[-1, 1]) for name, g in gaps.items()})
+        accessible = {name: window.subtract(accessible[name], gaps[name]) for name in names}
     rec = read_map(rec_map, names, "recombination", scale=1e-8) if rec_map else None
     mut = read_map(mut_map, names, "mutation") if mut_map else None
     contig = {window.plain_name(c): c for c in vcf.seqnames}
@@ -178,6 +195,21 @@ def pick_chromosomes(vcf, mask, requested):
     if not names:
         raise InputError("the VCF and the mask have no autosome in common; check the chromosome names")
     return names
+
+
+def check_grch38(vcf, names, lengths):
+    """Stop if a chromosome is not a GRCh38 autosome, or the VCF gives it another length."""
+    for name in names:
+        if name not in lengths:
+            raise InputError(f"--human reads autosomes 1-22, and chromosome {name} is not one")
+    try:
+        found = dict(zip((window.plain_name(c) for c in vcf.seqnames), vcf.seqlens))
+    except AttributeError:                # the VCF header gives no lengths
+        return
+    for name in names:
+        if name in found and found[name] != lengths[name]:
+            raise InputError(f"--human expects GRCh38 coordinates, but chromosome {name} is {found[name]:,} bp long "
+                             f"in the VCF and {lengths[name]:,} bp in GRCh38")
 
 
 def read_map(path, names, kind, scale=1.0):

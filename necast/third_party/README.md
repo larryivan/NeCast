@@ -48,6 +48,10 @@ http://genetics.bwh.harvard.edu/downloads/Vova/Roulette/ and averaged in 1 kb
 bins by `generator/roulette_map/download_and_process.py` in
 https://huggingface.co/datasets/Larrivhan/NeCast-simulations.
 
+The simulator draws its map slices from these two files, and `necast run
+--human` reads them for human data, using only the shape of the mutation map:
+its mean in each window is set to the mutation rate.
+
 ## Inferred human histories: `histories/human_ne/`
 
 191 curves, used as the one part of the demography mixture that nobody
@@ -84,3 +88,11 @@ band and are multiplied by one constant to fit it: *A. gambiae* by 0.246, the
 Indian *M. m. castaneus* by 0.197, and one Holstein model by 1.111. A uniform
 factor leaves the shape — which is what generalisation is measured on —
 bit-for-bit intact, and each factor is recorded in the file.
+
+## GRCh38 gaps: `reference/grch38_gaps.bed`
+
+For chromosomes 1-22, the assembly gaps of GRCh38 (UCSC table `gap`) and one
+span per centromere, from the first to the last row of UCSC table
+`centromeres` (https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/).
+`necast run --human` leaves these out of the accessible sequence and reads
+the chromosome lengths from them.

@@ -45,6 +45,7 @@ include = ["necast*"]
 "necast.third_party" = ["README.md"]
 "necast.third_party.psmcplus" = ["LICENSE.txt"]
 "necast.third_party.maps" = ["*.bed"]
+"necast.third_party.reference" = ["*.bed"]
 "necast.third_party.histories.human_ne" = [
     "README.md",
     "smcpp_popsizes_1kg.csv",

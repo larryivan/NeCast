@@ -38,3 +38,8 @@ def test_input_errors(tmp_path):
 def test_errors_are_reported_without_a_traceback():
     with pytest.raises(SystemExit, match="^necast: give the mutation rate"):
         cli.main(["run", str(VCF), "--mask", str(MASK), "--out", "unused", "--rec-rate", "1e-8"])
+
+
+def test_human_needs_grch38(tmp_path):
+    with pytest.raises(cli.InputError, match="GRCh38"):
+        cli.run(VCF, MASK, tmp_path, human=True)          # the example's chromosome 1 is 30 Mb long

@@ -14,33 +14,17 @@ would have them) and tests/data/benchmark_window.npz (the window's arrays as
 the network read them, and its published prediction). Needs bgzip and tabix.
 """
 
-import hashlib
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
 
+from necast.train import individuals, six_states
+
 ROW = 0
 CHROMOSOME = "1"
 GENOTYPES = np.array(["0/0", "0/1", "1/1", "0/.", "1/.", "./."])
-
-
-def paper_individuals(window_id, n=64):
-    """The 32 of the window's 64 individuals that the network read."""
-    digest = hashlib.blake2b(f"dlcoalsim-ladder-v1:0:{window_id}".encode(), digest_size=8).digest()
-    return np.random.default_rng(int.from_bytes(digest, "big")).permutation(n)[:32]
-
-
-def states(packed, missing, n_haplotypes):
-    """Six genotype states of every individual (see necast.summaries)."""
-    bits = np.unpackbits(packed, axis=1, bitorder="little")[:, :n_haplotypes]
-    lost = np.zeros(bits.shape, bool)
-    lost.reshape(-1)[missing] = True
-    called = 2 - lost[:, 0::2] - lost[:, 1::2].astype(int)
-    derived = (bits[:, 0::2] & ~lost[:, 0::2]) + (bits[:, 1::2] & ~lost[:, 1::2])
-    out = np.where(called == 2, derived, 5)
-    return np.where(called == 1, 3 + derived, out).astype(np.uint8)
 
 
 def write_bed(path, breaks, rates):
@@ -81,8 +65,8 @@ def main(fragment, predictions):
     length = int(z["sequence_length"][k])
     window_id = str(z["sample_id"][k])
     positions = z["variant_positions_bp"][v0:v1]
-    chosen = states(z["genotype_packed"][v0:v1], z["missing_flat_idx"][m0:m1].astype(np.int64),
-                    int(z["n_haplotypes"][0]))[:, paper_individuals(window_id)]
+    chosen = six_states(z["genotype_packed"][v0:v1], z["missing_flat_idx"][m0:m1].astype(np.int64),
+                        int(z["n_haplotypes"][0]))[:, individuals(window_id, 64)]
     rec = z["obs_rec_pos"][r0:r1], z["obs_rec_rate"][r0 - k: r1 - k - 1]
     mut = z["obs_mut_pos"][u0:u1], z["obs_mut_rate"][u0 - k: u1 - k - 1]
     published = np.load(predictions)

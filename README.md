@@ -72,7 +72,7 @@ In the folder given by `--out` you get:
 
 - [Guide](docs/guide.md): every input, option and output
 - [Questions and problems](docs/faq.md)
-- [Simulating windows](docs/simulate.md) with `necast simulate`
+- [Simulating windows](docs/simulate.md) and [training the network](docs/train.md)
 - The paper's model and data on Hugging Face: [model](https://huggingface.co/Larrivhan/NeCast),
   [simulations](https://huggingface.co/datasets/Larrivhan/NeCast-simulations),
   [benchmark](https://huggingface.co/datasets/Larrivhan/NeCast-benchmark),

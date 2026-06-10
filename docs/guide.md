@@ -16,6 +16,7 @@ necast run VCF --mask BED --out FOLDER [options]
 | `--samples FILE` | the individuals to read, one per line (default: every sample in the VCF) |
 | `--chromosomes LIST` | chromosomes to read, such as `1,2,3` (default: every autosome in both the VCF and the mask) |
 | `--generation-time YEARS` | adds times in years to the table and the figure |
+| `--weights FILE` | a network trained with `necast train` (default: the published one) |
 | `--threads N` | CPU threads (default: all) |
 
 `necast run --help` prints the same list.

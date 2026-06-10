@@ -4,6 +4,7 @@
     necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out results
     necast example
     necast simulate --preset mini --out-dir simulations
+    necast train simulations --out trained
 """
 
 import argparse
@@ -52,6 +53,7 @@ def main(argv=None):
     p.add_argument("--samples", help="file of the samples to read, one per line (default: all in the VCF)")
     p.add_argument("--chromosomes", help="chromosomes to read, separated by commas (default: all autosomes)")
     p.add_argument("--generation-time", type=float, help="years per generation, to give times in years as well")
+    p.add_argument("--weights", help="a network trained with necast train (default: the published one)")
     p.add_argument("--threads", type=int, default=cpus(), help=f"CPU threads (default: all, here {cpus()})")
 
     p = commands.add_parser("example", help="run NeCast on the example data that comes with it",
@@ -61,6 +63,15 @@ def main(argv=None):
 
     commands.add_parser("simulate", help="simulate windows to train or test NeCast (see necast simulate --help)")
 
+    p = commands.add_parser("train", help="train the network on simulated windows",
+                            description="Train the network on windows from necast simulate (see docs/train.md).")
+    p.add_argument("simulations", help="folder written by necast simulate")
+    p.add_argument("--out", required=True, help="folder for the prepared windows and the trained network")
+    p.add_argument("--epochs", type=int, default=12, help="passes over the windows (default: 12)")
+    p.add_argument("--device", help="cuda or cpu (default: cuda if there is a GPU)")
+    p.add_argument("--prepare-only", action="store_true", help="only prepare the windows, which needs no GPU")
+    p.add_argument("--threads", type=int, default=cpus(), help=f"CPU threads (default: all, here {cpus()})")
+
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["simulate"]:              # the simulator reads its own options
         command, args = "simulate", {"args": argv[1:]}
@@ -68,13 +79,13 @@ def main(argv=None):
         args = vars(parser.parse_args(argv))
         command = args.pop("command")
     try:
-        {"run": run, "example": example, "simulate": simulate}[command](**args)
+        {"run": run, "example": example, "simulate": simulate, "train": train}[command](**args)
     except InputError as e:
         sys.exit(f"necast: {e}")
 
 
 def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_map=None, samples=None,
-        chromosomes=None, generation_time=None, threads=None, truth=None):
+        chromosomes=None, generation_time=None, weights=None, threads=None, truth=None):
     """Estimate the size history from a VCF and write the results into the folder `out`.
 
     Returns log10 Ne on the 64 intervals of necast.posterior.GENERATIONS. `truth`,
@@ -107,7 +118,7 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
     if sample_count % 32:
         log(f"  the last {sample_count % 32} samples do not fill a group of 32 and are not read")
     torch.set_num_threads(min(threads, 8))
-    net = network.load()
+    net = network.load(weights or network.WEIGHTS)
     results = []
     for chromosome in names:
         windows = window.cut_windows(accessible[chromosome])
@@ -160,6 +171,17 @@ def simulate(args):
         raise InputError(f"necast simulate needs {e.name}; install it with:  pip install 'necast[simulate]'")
     sys.argv = ["necast simulate", *args]
     simulator()
+
+
+def train(simulations, out, epochs=12, device=None, prepare_only=False, threads=None):
+    """Prepare the simulated windows, then train a network on them (see necast.train)."""
+    from necast import train as training
+    torch.set_num_threads(min(threads or cpus(), 8))
+    Path(out).mkdir(parents=True, exist_ok=True)
+    log = logger(Path(out) / "log.txt")
+    training.prepare(simulations, out, threads or cpus(), log)
+    if not prepare_only:
+        training.train(out, epochs, device, log)
 
 
 def open_vcf(path, samples):
@@ -222,8 +244,6 @@ def read_map(path, names, kind, scale=1.0):
 
 def logger(path):
     """A function that prints a message and adds it to the file `path`."""
-    path.write_text("")
-
     def log(message):
         print(message, flush=True)
         with open(path, "a") as f:

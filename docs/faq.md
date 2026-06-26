@@ -46,6 +46,21 @@ chromosomes with `--chromosomes`.
 populations, change the history NeCast sees. With more than 32, NeCast reads
 them in groups of 32 and averages the groups.
 
+**What does the curve show if the population was structured?**
+Like PSMC and its successors, NeCast follows the rate at which pairs of
+genomes find a common ancestor, and reports its inverse as a size. That is
+the population size when mating is random; structure and admixture change it.
+
+**Should I filter the variants?**
+By call quality only. Filtering by allele frequency, removing singletons or
+pruning for linkage disequilibrium removes the signal NeCast reads.
+
+**Does sequencing depth matter?**
+The training simulations included genotype errors and missing calls. For the
+same 1000 Genomes individuals, estimates from the low-coverage data and from
+the 30x data differed by 0.08 on the log10 scale on average, 50 to 500
+generations ago.
+
 **Does the data need to be phased?**
 No. NeCast reads unphased genotypes and ignores phase if it is there.
 
@@ -62,6 +77,10 @@ The table then has columns in years as well, and the figure uses years.
 
 **Why does the estimate stop at 50 and 500,000 generations?**
 These are the limits of the 64 intervals the network was trained to estimate.
+
+**I changed the mutation rate. Can I rescale my result?**
+No: run NeCast again. The mutation rate changes the shape of the estimate as
+well as its level.
 
 **How many windows do I need?**
 One window gives an estimate, but a noisy one. More windows give a more

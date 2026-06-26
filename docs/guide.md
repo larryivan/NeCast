@@ -37,11 +37,16 @@ data.vcf.gz` writes the index). NeCast reads, in each window:
 The reference allele is taken as the ancestral one, as in the paper's
 analysis of the 1000 Genomes Project; the genotypes need no polarisation.
 
+Filter genotypes by call quality only. Filtering by allele frequency,
+removing singletons or pruning for linkage disequilibrium removes the signal
+NeCast reads.
+
 ### Individuals
 
 NeCast reads 32 diploid individuals at a time, because that is what the
 network was trained on. They should come from one population and be
-unrelated. With 64 individuals NeCast reads two groups of 32 and averages
+unrelated: close relatives share long stretches of their genomes, which looks
+like a small recent population (`plink2 --king-cutoff` finds them). With 64 individuals NeCast reads two groups of 32 and averages
 them; individuals left over after the last full group are not read.
 
 `--samples` gives the individuals in a text file, one sample name per line, as
@@ -71,9 +76,12 @@ chromosome in every file.
 
 ### Mutation rate
 
-`--mu` is the mutation rate per bp per generation. NeCast uses it to turn
-diversity into population size, so the estimate depends on it: use the best
-published value for your species.
+`--mu` is the mutation rate per bp per generation; a rate per year must first
+be multiplied by the generation time. NeCast uses it to turn diversity into
+population size, so the estimate depends on it: use the best published value
+for your species. In tests, a rate off by a factor of 2 moved the estimate by
+about 0.2 on the log10 scale and changed its shape as well as its level, so
+for a new rate, run NeCast again rather than rescaling a result.
 
 ### Recombination
 
@@ -92,8 +100,11 @@ Rates are kept between 0.00001 and 1,000 cM/Mb, the range of the maps in the
 training simulations. A masked stretch inside a window keeps its
 recombination: NeCast adds it at the point where the accessible pieces join.
 
-A map helps NeCast most for recent times: in the paper, without a map, recent
-sizes were underestimated.
+A map helps NeCast most for recent times: in the paper's simulations,
+without a map, sizes 50 to 500 generations ago came out about 1.7 times too
+low. When no map exists, the average rate of the species is much less
+critical than the mutation rate: an average off by a factor of 2 moved the
+estimate by about 0.06 on the log10 scale.
 
 ### Mutation map
 
@@ -117,6 +128,14 @@ These are the settings of the paper's 1000 Genomes analysis. The paper also
 left out two regions under strong selection on chromosome 2, around EDAR
 (108.8-109.0 Mb) and LCT (135.8-137.2 Mb); to do the same, remove them from
 the mask.
+
+### Warnings
+
+NeCast warns when the data are unlike the training simulations, where the
+estimates are less certain: a mutation rate outside 6.25e-9 to 2.5e-8, a
+window whose mean recombination rate is outside 1.7e-9 to 3e-8 per bp, or a
+group with more than 2% of its allele calls missing. The run goes on; the
+warnings are in `log.txt`.
 
 ## Outputs
 

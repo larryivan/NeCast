@@ -26,6 +26,9 @@ HUMAN = {"mu": 1.29e-8,                   # what --human uses unless told otherw
          "rec_map": THIRD_PARTY / "maps" / "decode2019_avg_hg38.bed",
          "mut_map": THIRD_PARTY / "maps" / "roulette_2023_autosomes_hg38_1000bp.bed",
          "gaps": THIRD_PARTY / "reference" / "grch38_gaps.bed"}
+TRAINED = {"mu": (6.25e-9, 2.5e-8),        # ranges of the training simulations: mutation and
+           "rec": (1.7e-9, 3e-8),          # recombination per bp per generation (window means),
+           "missing": 0.02}                # missing allele calls
 
 
 class InputError(Exception):
@@ -98,6 +101,10 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
         raise InputError("give the mutation rate per bp per generation with --mu")
     if rec_map is None and rec_rate is None:
         raise InputError("give a recombination map with --rec-map, or one rate for the whole genome with --rec-rate")
+    if not 0 < mu < 1e-6:
+        raise InputError(f"--mu {mu:g} is not a mutation rate per bp per generation (humans: about 1.29e-8)")
+    if rec_rate is not None and not 0 < rec_rate < 1e-4:
+        raise InputError(f"--rec-rate {rec_rate:g} is not a rate per bp per generation; 1 cM/Mb is 1e-8")
     threads = threads or cpus()
     vcf, groups, sample_count = open_vcf(vcf, samples)
     accessible = window.read_bed(mask)
@@ -107,6 +114,9 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
         check_grch38(vcf, names, {name: int(g[-1, 1]) for name, g in gaps.items()})
         accessible = {name: window.subtract(accessible[name], gaps[name]) for name in names}
     rec = read_map(rec_map, names, "recombination", scale=1e-8) if rec_map else None
+    if rec and np.mean([np.sum(np.diff(b) * r) / (b[-1] - b[0]) for b, r in (rec[n] for n in names)]) < 1e-11:
+        raise InputError(f"the rates in {rec_map} are below 0.001 cM/Mb on average; the map should be in cM/Mb "
+                         "(the human average is about 1.3). If it is per bp per generation, multiply it by 1e8.")
     mut = read_map(mut_map, names, "mutation") if mut_map else None
     contig = {window.plain_name(c): c for c in vcf.seqnames}
 
@@ -117,29 +127,36 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
         f"{'chromosome' if len(names) == 1 else 'chromosomes'} {', '.join(names)}, {threads} threads")
     if sample_count % 32:
         log(f"  the last {sample_count % 32} samples do not fill a group of 32 and are not read")
+    if not TRAINED["mu"][0] <= mu <= TRAINED["mu"][1]:
+        log(f"  warning: --mu {mu:g} is outside the training range ({TRAINED['mu'][0]:g} to {TRAINED['mu'][1]:g}); "
+            "the estimate may be biased")
+    if rec is None:
+        log("  note: without a recombination map, NeCast underestimated sizes 50-500 generations ago about "
+            "1.7-fold in the paper's simulations")
     torch.set_num_threads(min(threads, 8))
     net = network.load(weights or network.WEIGHTS)
-    results = []
+    started, results = time.perf_counter(), []
     for chromosome in names:
         windows = window.cut_windows(accessible[chromosome])
         if not windows:
             log(f"chromosome {chromosome}: no window (no 30 Mb of accessible sequence without a gap over 1 Mb)")
         for intervals in windows:
-            started = time.perf_counter()
             positions, states = window.read_genotypes(vcf, contig[chromosome], intervals, groups.ravel())
             rec_w = maps.recombination(rec[chromosome], intervals) if rec else maps.flat(rec_rate, window.WINDOW_BP)
             mut_w = maps.mutation(mut[chromosome], intervals, mu) if mut else maps.flat(mu, window.WINDOW_BP)
+            log(f"chromosome {chromosome}, {intervals[0, 0] + 1:,}-{intervals[-1, 1]:,} bp: {len(positions):,} sites")
+            check_map(rec_w, log)
             for g in range(len(groups)):
                 w = window.Window(chromosome, intervals, positions, np.ascontiguousarray(states[:, 32 * g: 32 * g + 32]),
                                   rec_w, mut_w)
+                check_calls(w.states, f" of group {g + 1}" if len(groups) > 1 else "", log)
                 results.append((chromosome, w.start, w.end, g + 1, net.estimate(w, threads)))
-            log(f"chromosome {chromosome}, {intervals[0, 0] + 1:,}-{intervals[-1, 1]:,} bp: "
-                f"{len(positions):,} sites, {time.perf_counter() - started:.0f} s")
     if not results:
         raise InputError("found no window: a window needs 30 Mb of accessible sequence on one chromosome, "
                          "with no masked stretch longer than 1 Mb. Check the mask.")
     mean = report.write(out, results, generation_time, truth)
-    log(f"done: {plural(len(results) // len(groups), 'window')}; results in {out}: necast.tsv, windows.tsv, necast.png")
+    log(f"done in {time.perf_counter() - started:.0f} s: {plural(len(results) // len(groups), 'window')}; "
+        f"results in {out}: necast.tsv, windows.tsv, necast.png")
     return mean
 
 
@@ -217,6 +234,23 @@ def pick_chromosomes(vcf, mask, requested):
     if not names:
         raise InputError("the VCF and the mask have no autosome in common; check the chromosome names")
     return names
+
+
+def check_map(rec_map, log):
+    """Warn when a window's recombination rate is outside the range of the training windows."""
+    rate = float(np.sum(np.diff(rec_map[0]) * rec_map[1])) / window.WINDOW_BP
+    low, high = TRAINED["rec"]
+    if not low <= rate <= high:
+        log(f"  warning: the mean recombination rate of this window, {rate:.2g} per bp, is outside the "
+            f"training range ({low:g} to {high:g})")
+
+
+def check_calls(states, label, log):
+    """Warn when more allele calls are missing than in any training window."""
+    missing = (np.isin(states, (3, 4)).sum() + 2 * (states == 5).sum()) / (2 * states.size)
+    if missing > TRAINED["missing"]:
+        log(f"  warning: {missing:.1%} of the allele calls{label} are missing; the training windows had at most "
+            f"{TRAINED['missing']:.0%}")
 
 
 def check_grch38(vcf, names, lengths):

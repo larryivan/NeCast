@@ -43,3 +43,14 @@ def test_errors_are_reported_without_a_traceback():
 def test_human_needs_grch38(tmp_path):
     with pytest.raises(cli.InputError, match="GRCh38"):
         cli.run(VCF, MASK, tmp_path, human=True)          # the example's chromosome 1 is 30 Mb long
+
+
+def test_rates_in_the_wrong_units(tmp_path):
+    with pytest.raises(cli.InputError, match="--mu"):
+        cli.run(VCF, MASK, tmp_path, mu=1.29, rec_rate=1e-8)
+    with pytest.raises(cli.InputError, match="1 cM/Mb is 1e-8"):
+        cli.run(VCF, MASK, tmp_path, mu=1.29e-8, rec_rate=1.2)
+    per_bp = tmp_path / "per_bp.bed"
+    per_bp.write_text("1\t0\t30000000\t1.2e-8\n")
+    with pytest.raises(cli.InputError, match="multiply it by 1e8"):
+        cli.run(VCF, MASK, tmp_path, mu=1.29e-8, rec_map=per_bp)

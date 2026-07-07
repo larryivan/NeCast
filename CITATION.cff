@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use NeCast, please cite the paper below."
+title: NeCast
+abstract: "Population size history from unphased genotypes and recombination maps."
+type: software
+authors:
+  - family-names: Han
+    given-names: Yufan
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/larryivan/NeCast"
+keywords:
+  - population genetics
+  - effective population size
+  - demographic inference
+preferred-citation:
+  type: article
+  title: "Neural inference of population size history from noisy genotype data and recombination maps"
+  authors:
+    - family-names: Han
+      given-names: Yufan
+    - family-names: Wang
+      given-names: Ke
+  status: in-preparation

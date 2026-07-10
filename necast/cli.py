@@ -142,9 +142,13 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
             log(f"chromosome {chromosome}: no window (no 30 Mb of accessible sequence without a gap over 1 Mb)")
         for intervals in windows:
             positions, states = window.read_genotypes(vcf, contig[chromosome], intervals, groups.ravel())
+            span = f"chromosome {chromosome}, {intervals[0, 0] + 1:,}-{intervals[-1, 1]:,} bp"
+            if not len(positions):                # e.g. a chromosome the VCF header names but holds no records for
+                log(f"{span}: no sites in the VCF; left out")
+                continue
             rec_w = maps.recombination(rec[chromosome], intervals) if rec else maps.flat(rec_rate, window.WINDOW_BP)
             mut_w = maps.mutation(mut[chromosome], intervals, mu) if mut else maps.flat(mu, window.WINDOW_BP)
-            log(f"chromosome {chromosome}, {intervals[0, 0] + 1:,}-{intervals[-1, 1]:,} bp: {len(positions):,} sites")
+            log(f"{span}: {len(positions):,} sites")
             check_map(rec_w, log)
             for g in range(len(groups)):
                 w = window.Window(chromosome, intervals, positions, np.ascontiguousarray(states[:, 32 * g: 32 * g + 32]),
@@ -153,7 +157,7 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
                 results.append((chromosome, w.start, w.end, g + 1, net.estimate(w, threads)))
     if not results:
         raise InputError("found no window: a window needs 30 Mb of accessible sequence on one chromosome, "
-                         "with no masked stretch longer than 1 Mb. Check the mask.")
+                         "with no masked stretch longer than 1 Mb, and sites in the VCF. Check the mask.")
     mean = report.write(out, results, generation_time, truth)
     log(f"done in {time.perf_counter() - started:.0f} s: {plural(len(results) // len(groups), 'window')}; "
         f"results in {out}: necast.tsv, windows.tsv, necast.png")

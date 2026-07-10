@@ -26,7 +26,9 @@ necast run VCF --mask BED --out FOLDER [options]
 ### Genotypes
 
 A VCF or BCF file, compressed with bgzip and indexed (`bcftools index
-data.vcf.gz` writes the index). NeCast reads, in each window:
+data.vcf.gz` writes the index). To analyse files split by chromosome
+together, join them first with `bcftools concat -Oz -o all.vcf.gz chr1.vcf.gz
+chr2.vcf.gz ...` and index the result. NeCast reads, in each window:
 
 - biallelic SNVs whose FILTER is `PASS` or `.`; other records are skipped;
 - at a position with two or more such records, none of them;
@@ -69,7 +71,8 @@ sequence. A window may span masked stretches of up to 1 Mb; a longer one ends
 the current run of sequence. Each run is cut from left to right, and a
 remainder shorter than 30 Mb is left out. Inside a window the accessible
 pieces are joined end to end. A chromosome with less than 30 Mb of accessible
-sequence in one run gives no window; the log says so.
+sequence in one run gives no window, and a window with no site in the VCF (on
+a chromosome the VCF does not hold, for example) is left out; the log says so.
 
 Chromosome names may carry `chr` or not: `chr1` and `1` are the same
 chromosome in every file.

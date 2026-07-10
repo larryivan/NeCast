@@ -1,3 +1,7 @@
+import gzip
+import shutil
+import subprocess
+
 import numpy as np
 import pytest
 
@@ -5,6 +9,16 @@ from necast import cli
 
 EXAMPLE = cli.EXAMPLE
 VCF, MASK = EXAMPLE / "example.vcf.gz", EXAMPLE / "mask.bed"
+needs_tabix = pytest.mark.skipif(not (shutil.which("bgzip") and shutil.which("tabix")), reason="needs bgzip and tabix")
+
+
+def example_vcf(folder, edit):
+    """The example VCF with its lines changed by `edit`, compressed and indexed."""
+    path = folder / "edited.vcf"
+    path.write_text("\n".join(edit(gzip.open(VCF, "rt").read().splitlines())) + "\n")
+    subprocess.run(["bgzip", "-f", str(path)], check=True)
+    subprocess.run(["tabix", "-f", "-p", "vcf", f"{path}.gz"], check=True)
+    return f"{path}.gz"
 
 
 def test_example(tmp_path):
@@ -33,6 +47,17 @@ def test_input_errors(tmp_path):
     short.write_text("1\t0\t10000000\n")
     with pytest.raises(cli.InputError, match="no window"):
         cli.run(VCF, short, tmp_path, mu=1e-8, rec_rate=1e-8)
+
+
+@needs_tabix
+def test_a_window_without_sites_is_left_out(tmp_path):
+    # chromosome 2 is named in the header but has no records, as in a VCF split by chromosome
+    vcf = example_vcf(tmp_path, lambda lines: [lines[0], "##contig=<ID=2,length=30000000>", *lines[1:]])
+    mask = tmp_path / "mask.bed"
+    mask.write_text("2\t0\t30000000\n")
+    with pytest.raises(cli.InputError, match="no window"):
+        cli.run(vcf, mask, tmp_path / "out", mu=1e-8, rec_rate=1e-8)
+    assert "no sites in the VCF; left out" in (tmp_path / "out" / "log.txt").read_text()
 
 
 def test_errors_are_reported_without_a_traceback():

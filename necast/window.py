@@ -5,9 +5,12 @@ accessible intervals are joined end to end, so positions inside a window run
 from 0 to 30,000,000 whatever the gaps between them.
 """
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
+
+warnings.filterwarnings("ignore", "no intervals found")   # cyvcf2, for a region without records; necast logs it
 
 WINDOW_BP = 30_000_000
 MAX_GAP_BP = 1_000_000       # a window never spans a masked stretch longer than this

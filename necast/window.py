@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore", "no intervals found")   # cyvcf2, for a region
 WINDOW_BP = 30_000_000
 MAX_GAP_BP = 1_000_000       # a window never spans a masked stretch longer than this
 INDIVIDUALS = 32             # the network reads 32 individuals at a time
-BASES = {"A", "C", "G", "T"}
+BASES = set("ACGTacgt")      # the VCF specification allows lowercase bases
 
 
 @dataclass
@@ -121,7 +121,10 @@ def read_genotypes(vcf, chromosome, intervals, columns):
     for record in vcf(region):
         if record.FILTER is None and len(record.ALT) == 1 and record.REF in BASES and record.ALT[0] in BASES:
             positions.append(record.POS - 1)
-            rows.append(record.genotype.array()[columns, :2])
+            gt = record.genotype.array()[columns]          # the alleles, then the phase
+            if gt.shape[1] == 2:                           # every call haploid: mark them as cyvcf2 does
+                gt = np.insert(gt, 1, -2, axis=1)
+            rows.append(gt[:, :2])
     if not positions:
         return np.zeros(0, np.int64), np.zeros((0, len(columns)), np.uint8)
     physical = np.array(positions, dtype=np.int64)
@@ -132,10 +135,13 @@ def read_genotypes(vcf, chromosome, intervals, columns):
 
 
 def states_from_alleles(alleles):
-    """Six genotype states from allele pairs, with -1 for a missing allele."""
-    if np.any(alleles < -1):
-        raise ValueError("found haploid genotypes; NeCast reads diploid autosomes only")
+    """Six genotype states from allele pairs, with -1 for a missing allele. A
+    second allele of -2 marks a haploid call, except after -1: a lone '.' is
+    a missing call."""
     a, b = alleles[..., 0], alleles[..., 1]
+    b = np.where((a == -1) & (b == -2), -1, b)
+    if np.any(b < -1):
+        raise ValueError("found haploid genotypes; NeCast reads diploid autosomes only")
     states = np.where((a >= 0) & (b >= 0), a + b, 5)
     one = (a < 0) ^ (b < 0)
     states = np.where(one, 3 + np.maximum(a, b), states)

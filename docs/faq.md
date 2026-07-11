@@ -65,8 +65,8 @@ generations ago.
 No. NeCast reads unphased genotypes and ignores phase if it is there.
 
 **What about missing genotypes?**
-They are allowed, both missing (`./.`) and half-missing (`0/.`). The training
-simulations included missing calls.
+They are allowed, both missing (`./.` or `.`) and half-missing (`0/.`). The
+training simulations included missing calls.
 
 **Do I need ancestral alleles?**
 No. NeCast takes the reference allele as ancestral, as the paper did.

@@ -32,8 +32,8 @@ chr2.vcf.gz ...` and index the result. NeCast reads, in each window:
 
 - biallelic SNVs whose FILTER is `PASS` or `.`; other records are skipped;
 - at a position with two or more such records, none of them;
-- diploid genotypes, phased or not. Missing calls (`./.`) and half-missing
-  calls (`0/.`) are allowed. Haploid calls stop the run, so leave out chrX in
+- diploid genotypes, phased or not. Missing calls (`./.` or `.`) and
+  half-missing calls (`0/.`) are allowed. Haploid calls stop the run, so leave out chrX in
   males, chrY and the mitochondria.
 
 The reference allele is taken as the ancestral one, as in the paper's

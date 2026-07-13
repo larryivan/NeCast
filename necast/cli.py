@@ -147,7 +147,8 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
             if not len(positions):                # e.g. a chromosome the VCF header names but holds no records for
                 log(f"{span}: no sites in the VCF; left out")
                 continue
-            rec_w = maps.recombination(rec[chromosome], intervals) if rec else maps.flat(rec_rate, window.WINDOW_BP)
+            physical = rec[chromosome] if rec else maps.flat(rec_rate, intervals[-1, 1])   # on the chromosome
+            rec_w = maps.recombination(physical, intervals)
             mut_w = maps.mutation(mut[chromosome], intervals, mu) if mut else maps.flat(mu, window.WINDOW_BP)
             log(f"{span}: {len(positions):,} sites")
             check_map(rec_w, log)

@@ -39,7 +39,7 @@ def _contiguous(rows, scale):
 
 
 def flat(rate, length):
-    """A constant map over a window."""
+    """A constant map from 0 to `length`."""
     return np.array([0.0, float(length)]), np.array([rate], np.float32)
 
 

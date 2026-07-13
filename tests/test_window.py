@@ -43,7 +43,7 @@ def test_collapse():
 def test_states_from_alleles():
     alleles = np.array([[[0, 0], [0, 1], [1, 1], [0, -1], [-1, 1], [-1, -1], [-1, -2]]])   # [-1, -2] is '.'
     np.testing.assert_array_equal(window.states_from_alleles(alleles), [[0, 1, 2, 3, 4, 5, 5]])
-    with pytest.raises(ValueError, match="haploid"):
+    with pytest.raises(window.InputError, match="haploid"):
         window.states_from_alleles(np.array([[[1, -2]]]))
 
 
@@ -86,5 +86,5 @@ def test_read_genotypes(tmp_path):
 def test_haploid_calls_stop_the_reading(tmp_path):
     for genotypes in (["1", "0/1", "0/0"], ["1", "0", "1"]):     # some haploid calls; only haploid calls
         vcf = write_vcf(tmp_path, [("101", "A", "G", "PASS", genotypes)])
-        with pytest.raises(ValueError, match="haploid"):
+        with pytest.raises(window.InputError, match="haploid"):
             window.read_genotypes(vcf, "chr1", np.array([[50, 400]]), np.array([0, 1, 2]))

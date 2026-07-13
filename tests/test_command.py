@@ -47,6 +47,16 @@ def test_input_errors(tmp_path):
     short.write_text("1\t0\t10000000\n")
     with pytest.raises(cli.InputError, match="no window"):
         cli.run(VCF, short, tmp_path, mu=1e-8, rec_rate=1e-8)
+    with pytest.raises(cli.InputError, match="cannot find"):
+        cli.run(VCF, tmp_path / "typo.bed", tmp_path, mu=1e-8, rec_rate=1e-8)
+    hapmap = tmp_path / "hapmap.txt"
+    hapmap.write_text("Chromosome Position(bp) Rate(cM/Mb) Map(cM)\nchr1 55550 2.98 0\nchr1 82571 0.08 0.08\n")
+    with pytest.raises(cli.InputError, match="a map is a BED file"):
+        cli.run(VCF, MASK, tmp_path, mu=1e-8, rec_map=hapmap)
+    with pytest.raises(cli.InputError, match="--epochs"):
+        cli.train(tmp_path, tmp_path / "trained", epochs=0)
+    with pytest.raises(cli.InputError, match="no simulated windows"):
+        cli.train(tmp_path, tmp_path / "trained", threads=1)
 
 
 @needs_tabix

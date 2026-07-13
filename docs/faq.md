@@ -35,6 +35,10 @@ The VCF is on another assembly, most often GRCh37. The masks and maps of
 NeCast reads diploid autosomes. Leave out chrX, chrY and the mitochondria
 (`--chromosomes` selects what is read).
 
+**`cannot read the recombination map ...`**
+Maps are BED files: chromosome, start, end, rate. The
+[guide](guide.md#recombination) shows how to convert a map in HapMap format.
+
 **`the recombination map ... has no rates for chromosome ...`**
 Every chromosome that is read needs rates in the map. Add them, or read fewer
 chromosomes with `--chromosomes`.

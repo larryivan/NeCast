@@ -29,7 +29,7 @@ import torch
 import torch.nn.functional as F
 
 from necast import network, posterior, summaries
-from necast.window import INDIVIDUALS, WINDOW_BP, Window
+from necast.window import INDIVIDUALS, WINDOW_BP, InputError, Window
 
 SEED = 20260728
 EPOCHS = 12
@@ -45,13 +45,14 @@ def read_simulations(folder):
     samples = Path(folder) / "samples"
     files = sorted(samples.glob("shard_*.npz")) or sorted(samples.glob("*fragments/fragment_*.npz"))
     if not files:
-        raise FileNotFoundError(f"no simulated windows in {samples}")
+        raise InputError(f"no simulated windows in {samples}; make them with necast simulate")
     for path in files:
         z = np.load(path)
         rec_rates, mut_rates = (rate_offsets(z[f"obs_{m}_offsets"]) for m in ("rec", "mut"))
         for k, name in enumerate(z["sample_id"]):
             if int(z["sequence_length"][k]) != WINDOW_BP:
-                raise ValueError(f"{path}: window {name} is not {WINDOW_BP:,} bp long")
+                raise InputError(f"{path}: window {name} is not {WINDOW_BP:,} bp long; NeCast trains on windows "
+                                 "of 30 Mb (necast simulate --preset full_v01)")
             v0, v1 = z["variant_offsets"][k: k + 2]
             m0, m1 = z["missing_offsets"][k: k + 2]
             states = six_states(z["genotype_packed"][v0:v1], z["missing_flat_idx"][m0:m1].astype(np.int64),
@@ -78,7 +79,7 @@ def six_states(packed, missing, n_haplotypes):
 def individuals(name, n):
     """The 32 of a window's n individuals NeCast reads: a fixed random choice per window."""
     if n < INDIVIDUALS:
-        raise ValueError(f"window {name} has {n} individuals; NeCast reads {INDIVIDUALS}")
+        raise InputError(f"window {name} has {n} individuals; NeCast reads {INDIVIDUALS}")
     digest = hashlib.blake2b(f"dlcoalsim-ladder-v1:0:{name}".encode(), digest_size=8).digest()
     return np.random.default_rng(int.from_bytes(digest, "big")).permutation(n)[:INDIVIDUALS]
 
@@ -178,7 +179,7 @@ def train(out, epochs=EPOCHS, device=None, log=print):
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
     data = Prepared(out)
     if len(data) < 10:
-        raise ValueError(f"training needs at least 10 prepared windows, and {out / 'windows'} has {len(data)}")
+        raise InputError(f"training needs at least 10 prepared windows, and {out / 'windows'} has {len(data)}")
     fit, validation = data.split()
     log(f"{len(fit):,} windows to fit, {len(validation):,} to choose the best epoch, on {device}")
 

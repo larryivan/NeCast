@@ -17,6 +17,7 @@ import numpy as np
 import torch
 
 from necast import __version__, maps, network, report, window
+from necast.window import InputError
 
 EXAMPLE = Path(__file__).parent / "example"
 EXAMPLE_MU = 8.34e-9                      # mean mutation rate of the simulated example window
@@ -29,10 +30,6 @@ HUMAN = {"mu": 1.29e-8,                   # what --human uses unless told otherw
 TRAINED = {"mu": (6.25e-9, 2.5e-8),        # ranges of the training simulations: mutation and
            "rec": (1.7e-9, 3e-8),          # recombination per bp per generation (window means),
            "missing": 0.02}                # missing allele calls
-
-
-class InputError(Exception):
-    """A problem with the input, reported as a message without a traceback."""
 
 
 def main(argv=None):
@@ -105,6 +102,9 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
         raise InputError(f"--mu {mu:g} is not a mutation rate per bp per generation (humans: about 1.29e-8)")
     if rec_rate is not None and not 0 < rec_rate < 1e-4:
         raise InputError(f"--rec-rate {rec_rate:g} is not a rate per bp per generation; 1 cM/Mb is 1e-8")
+    for path in (vcf, mask, samples, rec_map, mut_map, weights):
+        if path and not Path(path).exists():
+            raise InputError(f"cannot find {path}")
     threads = threads or cpus()
     vcf, groups, sample_count = open_vcf(vcf, samples)
     accessible = window.read_bed(mask)
@@ -197,6 +197,8 @@ def simulate(args):
 def train(simulations, out, epochs=12, device=None, prepare_only=False, threads=None):
     """Prepare the simulated windows, then train a network on them (see necast.train)."""
     from necast import train as training
+    if epochs < 1:
+        raise InputError("--epochs must be at least 1")
     torch.set_num_threads(min(threads or cpus(), 8))
     Path(out).mkdir(parents=True, exist_ok=True)
     log = logger(Path(out) / "log.txt")
@@ -208,10 +210,9 @@ def train(simulations, out, epochs=12, device=None, prepare_only=False, threads=
 def open_vcf(path, samples):
     """The VCF, reading only the chosen samples, with their columns in groups of 32."""
     from cyvcf2 import VCF
-    if not Path(path).exists():
-        raise InputError(f"cannot find {path}")
     if not (Path(f"{path}.tbi").exists() or Path(f"{path}.csi").exists()):
-        raise InputError(f"{path} has no index (.tbi or .csi). Make one with:  bcftools index {path}")
+        raise InputError(f"{path} has no index (.tbi or .csi). Make one with:  bcftools index {path}  "
+                         "(compress a plain .vcf with bgzip first)")
     vcf = VCF(str(path))
     chosen = [line.strip() for line in open(samples) if line.strip()] if samples else vcf.samples
     unknown = sorted(set(chosen) - set(vcf.samples))
@@ -273,7 +274,13 @@ def check_grch38(vcf, names, lengths):
 
 
 def read_map(path, names, kind, scale=1.0):
-    rates = maps.read(path, scale)
+    try:
+        rates = maps.read(path, scale)
+    except ValueError:                    # e.g. a map in HapMap format: position, rate, cM
+        rates = {}
+    if not rates:
+        raise InputError(f"cannot read the {kind} map {path}: a map is a BED file of chromosome, start, end and "
+                         "rate (see docs/guide.md)")
     missing = [name for name in names if name not in rates]
     if missing:
         raise InputError(f"the {kind} map {path} has no rates for chromosome {missing[0]}")

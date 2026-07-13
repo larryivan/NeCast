@@ -18,6 +18,10 @@ INDIVIDUALS = 32             # the network reads 32 individuals at a time
 BASES = set("ACGTacgt")      # the VCF specification allows lowercase bases
 
 
+class InputError(Exception):
+    """A problem with the input, reported as a message without a traceback."""
+
+
 @dataclass
 class Window:
     chromosome: str
@@ -141,7 +145,7 @@ def states_from_alleles(alleles):
     a, b = alleles[..., 0], alleles[..., 1]
     b = np.where((a == -1) & (b == -2), -1, b)
     if np.any(b < -1):
-        raise ValueError("found haploid genotypes; NeCast reads diploid autosomes only")
+        raise InputError("found haploid genotypes; NeCast reads diploid autosomes only")
     states = np.where((a >= 0) & (b >= 0), a + b, 5)
     one = (a < 0) ^ (b < 0)
     states = np.where(one, 3 + np.maximum(a, b), states)

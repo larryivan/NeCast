@@ -1,6 +1,7 @@
 import gzip
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -73,6 +74,16 @@ def test_a_window_without_sites_is_left_out(tmp_path):
 def test_errors_are_reported_without_a_traceback():
     with pytest.raises(SystemExit, match="^necast: give the mutation rate"):
         cli.main(["run", str(VCF), "--mask", str(MASK), "--out", "unused", "--rec-rate", "1e-8"])
+
+
+def test_default_chromosomes():
+    vcf = SimpleNamespace(seqnames=["chr1", "chr1_KI270706v1_random", "chrEBV", "chrX", "chr2"])
+    mask = {name: None for name in ("1", "1_KI270706v1_random", "EBV", "X")}
+    assert cli.pick_chromosomes(vcf, mask, None) == ["1", "1_KI270706v1_random", "EBV"]
+    assert cli.pick_chromosomes(vcf, mask, None, autosomes={"1": None, "2": None}) == ["1"]    # --human
+    assert cli.pick_chromosomes(vcf, mask, "chr1,EBV", autosomes={"1": None}) == ["1", "EBV"]
+    with pytest.raises(cli.InputError, match="not in the mask"):
+        cli.pick_chromosomes(vcf, mask, "2")
 
 
 def test_human_needs_grch38(tmp_path):

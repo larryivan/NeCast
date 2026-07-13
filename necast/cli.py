@@ -51,7 +51,8 @@ def main(argv=None):
     p.add_argument("--rec-map", help="BED file of recombination rates in cM/Mb, instead of --rec-rate")
     p.add_argument("--mut-map", help="BED file of relative mutation rates; their mean in each window is set to --mu")
     p.add_argument("--samples", help="file of the samples to read, one per line (default: all in the VCF)")
-    p.add_argument("--chromosomes", help="chromosomes to read, separated by commas (default: all autosomes)")
+    p.add_argument("--chromosomes", help="chromosomes to read, separated by commas (default: all in both the VCF "
+                                         "and the mask except X, Y, M and MT; with --human, 1-22)")
     p.add_argument("--generation-time", type=float, help="years per generation, to give times in years as well")
     p.add_argument("--weights", help="a network trained with necast train (default: the published one)")
     p.add_argument("--threads", type=int, default=cpus(), help=f"CPU threads (default: all, here {cpus()})")
@@ -108,9 +109,9 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
     threads = threads or cpus()
     vcf, groups, sample_count = open_vcf(vcf, samples)
     accessible = window.read_bed(mask)
-    names = pick_chromosomes(vcf, accessible, chromosomes)
+    gaps = window.read_bed(HUMAN["gaps"]) if human else None          # GRCh38 chromosomes 1-22
+    names = pick_chromosomes(vcf, accessible, chromosomes, autosomes=gaps)
     if human:
-        gaps = window.read_bed(HUMAN["gaps"])
         check_grch38(vcf, names, {name: int(g[-1, 1]) for name, g in gaps.items()})
         accessible = {name: window.subtract(accessible[name], gaps[name]) for name in names}
     rec = read_map(rec_map, names, "recombination", scale=1e-8) if rec_map else None
@@ -227,7 +228,9 @@ def open_vcf(path, samples):
     return vcf, np.array([column[s] for s in chosen[: len(chosen) // 32 * 32]]).reshape(-1, 32), len(chosen)
 
 
-def pick_chromosomes(vcf, mask, requested):
+def pick_chromosomes(vcf, mask, requested, autosomes=None):
+    """The requested chromosomes, or else those in both the VCF and the mask
+    that are `autosomes` or, when these are not known, not X, Y, M or MT."""
     contigs = [window.plain_name(c) for c in vcf.seqnames]
     if requested:
         names = [window.plain_name(c.strip()) for c in requested.split(",")]
@@ -235,7 +238,7 @@ def pick_chromosomes(vcf, mask, requested):
             if name not in contigs or name not in mask:
                 raise InputError(f"chromosome {name} is not in {'the VCF' if name not in contigs else 'the mask'}")
         return names
-    names = [c for c in contigs if c in mask and c.upper() not in NOT_AUTOSOMES]
+    names = [c for c in contigs if c in mask and (c in autosomes if autosomes else c.upper() not in NOT_AUTOSOMES)]
     if not names:
         raise InputError("the VCF and the mask have no autosome in common; check the chromosome names")
     return names

@@ -14,7 +14,7 @@ necast run VCF --mask BED --out FOLDER [options]
 | `--rec-map BED` | recombination map in cM/Mb, instead of `--rec-rate` |
 | `--mut-map BED` | relative mutation rates along the genome |
 | `--samples FILE` | the individuals to read, one per line (default: every sample in the VCF) |
-| `--chromosomes LIST` | chromosomes to read, such as `1,2,3` (default: every autosome in both the VCF and the mask) |
+| `--chromosomes LIST` | chromosomes to read, such as `1,2,3` (default: every chromosome in both the VCF and the mask except X, Y and the mitochondria; with `--human`, 1 to 22) |
 | `--generation-time YEARS` | adds times in years to the table and the figure |
 | `--weights FILE` | a network trained with `necast train` (default: the published one) |
 | `--threads N` | CPU threads (default: all) |
@@ -132,8 +132,8 @@ everywhere.
 - uses, unless you give your own, the deCODE recombination map
   (Halldorsson et al. 2019), the Roulette mutation map (Seplyarskiy et al.
   2023) and `--mu 1.29e-8`;
-- reads chromosomes 1 to 22 only, and stops if the VCF gives them lengths
-  other than GRCh38's.
+- reads chromosomes 1 to 22 only (it stops if `--chromosomes` names
+  another), and stops if the VCF gives them lengths other than GRCh38's.
 
 These are the settings of the paper's 1000 Genomes analysis. The paper also
 left out two regions under strong selection on chromosome 2, around EDAR

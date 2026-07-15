@@ -153,10 +153,10 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
             log(f"{span}: {len(positions):,} sites")
             check_map(rec_w, log)
             for g in range(len(groups)):
-                w = window.Window(chromosome, intervals, positions, np.ascontiguousarray(states[:, 32 * g: 32 * g + 32]),
-                                  rec_w, mut_w)
+                w = window.Window(positions, np.ascontiguousarray(states[:, 32 * g: 32 * g + 32]), rec_w, mut_w)
                 check_calls(w.states, f" of group {g + 1}" if len(groups) > 1 else "", log)
-                results.append((chromosome, w.start, w.end, g + 1, net.estimate(w, threads)))
+                results.append((chromosome, int(intervals[0, 0]), int(intervals[-1, 1]), g + 1,
+                                net.estimate(w, threads)))
     if not results:
         raise InputError("found no window: a window needs 30 Mb of accessible sequence on one chromosome, "
                          "with no masked stretch longer than 1 Mb, and sites in the VCF. Check the mask.")

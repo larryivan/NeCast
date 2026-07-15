@@ -50,6 +50,6 @@ def test_map_exposure_of_flat_maps():
 def test_reproduces_a_published_prediction():
     """The first window of benchmark history EMP_CEU, setting b (see scripts/make_example.py)."""
     z = np.load(Path(__file__).parent / "data" / "benchmark_window.npz")
-    w = Window("1", np.array([[0, WINDOW_BP]]), z["positions"].astype(np.int64), z["states"],
-               (z["rec_breaks"], z["rec_rates"]), (z["mut_breaks"], z["mut_rates"]))
+    w = Window(z["positions"].astype(np.int64), z["states"], (z["rec_breaks"], z["rec_rates"]),
+               (z["mut_breaks"], z["mut_rates"]))
     assert np.abs(NET.estimate(w, threads=4) - z["prediction"]).max() < 1e-5

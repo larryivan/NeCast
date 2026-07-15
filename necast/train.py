@@ -61,7 +61,7 @@ def read_simulations(folder):
             for m, rates in (("rec", rec_rates), ("mut", mut_rates)):
                 p0, p1 = z[f"obs_{m}_offsets"][k: k + 2]
                 maps.append((z[f"obs_{m}_pos"][p0:p1], z[f"obs_{m}_rate"][rates[k]: rates[k + 1]]))
-            yield str(name), Window("sim", np.array([[0, WINDOW_BP]]), z["variant_positions_bp"][v0:v1].astype(np.int64),
+            yield str(name), Window(z["variant_positions_bp"][v0:v1].astype(np.int64),
                                     np.ascontiguousarray(states[:, individuals(str(name), states.shape[1])]), *maps), \
                 z["target_log10_ne"][k]
 
@@ -137,8 +137,7 @@ class Prepared:
     def __getitem__(self, i):
         """(Window, Summaries, posterior or None, true log10 Ne) of window i."""
         with np.load(self.files[i]) as z:
-            w = Window("sim", np.array([[0, WINDOW_BP]]), z["positions"], z["states"],
-                       (z["rec_breaks"], z["rec_rates"]), (z["mut_breaks"], z["mut_rates"]))
+            w = Window(z["positions"], z["states"], (z["rec_breaks"], z["rec_rates"]), (z["mut_breaks"], z["mut_rates"]))
         s = summaries.Summaries(self.sfs[i], self.ld[i], self.ibs[i], self.ibs_exposure[i],
                                 float(self.log10_watterson[i]))
         p = None if np.isnan(self.posterior[i]).any() else self.posterior[i]

@@ -24,20 +24,10 @@ class InputError(Exception):
 
 @dataclass
 class Window:
-    chromosome: str
-    intervals: np.ndarray    # (k, 2) accessible intervals [start, end), 0-based, on the chromosome
     positions: np.ndarray    # sites, in window coordinates
     states: np.ndarray       # (sites, individuals) genotypes, coded as in necast.summaries
     rec_map: tuple           # (breaks, rates per bp per generation), breaks from 0 to WINDOW_BP
     mut_map: tuple
-
-    @property
-    def start(self):
-        return int(self.intervals[0, 0])
-
-    @property
-    def end(self):
-        return int(self.intervals[-1, 1])
 
 
 # --- the mask and the windows ------------------------------------------------

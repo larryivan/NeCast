@@ -32,6 +32,7 @@ class DatasetStateTests(unittest.TestCase):
         changed = dataclasses.replace(
             self.cfg,
             dataset_name="renamed",
+            compute_chunk_size=1,
             force=True,
             out_dir="/a/different/output",
             workers=99,
@@ -46,6 +47,7 @@ class DatasetStateTests(unittest.TestCase):
             "shard_size": self.cfg.shard_size + 1,
             "seq_len": self.cfg.seq_len + 1,
             "compression": not self.cfg.compression,
+            "compression_level": self.cfg.compression_level + 1,
             "include_truth": not self.cfg.include_truth,
             "max_retries": self.cfg.max_retries + 1,
         }.items():

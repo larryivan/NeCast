@@ -176,7 +176,7 @@ def simulate_one(task: tuple) -> dict:
     G = ts.genotype_matrix()
     if G.shape[0] > 0:
         G = _ensure_haplotype_count(G, cfg.n_haplotypes)
-        positions = np.array([site.position for site in ts.sites()], dtype=np.float64)
+        positions = np.asarray(ts.sites_position, dtype=np.float64)
     else:
         G = np.zeros((0, cfg.n_haplotypes), dtype=np.uint8)
         positions = np.zeros(0, dtype=np.float64)
@@ -232,7 +232,7 @@ def simulate_one(task: tuple) -> dict:
         "source_id": SOURCE_IDS.get(source, -1),
         "demo_id": DEMO_IDS.get(meta.get("demography_type", "stdpopsim"), 9),
         "positions": positions_u32,
-        "geno_packed": packed.astype(np.uint8),
+        "geno_packed": packed,
         "missing_flat_idx": missing_flat_idx,
         "obs_rec_pos": np.asarray(obs_rec_pos, dtype=np.float32),
         "obs_rec_rate": np.asarray(obs_rec_rate, dtype=np.float32),

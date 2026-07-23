@@ -124,6 +124,7 @@ class Config:
 
     n_samples: int = 2000
     shard_size: int = 64
+    compute_chunk_size: int = 16
     seq_len: int = 1_000_000
     n_haplotypes: int = 32
     time_bins: int = 48
@@ -202,6 +203,7 @@ class Config:
 
     workers: int = 1
     compression: bool = True
+    compression_level: int = 1
     include_truth: bool = False
     max_retries: int = 3
 
@@ -390,6 +392,7 @@ def validate_config(cfg: Config) -> None:
 
     positive_integer("n_samples")
     positive_integer("shard_size")
+    positive_integer("compute_chunk_size")
     seq_len = positive_integer("seq_len")
     n_haplotypes = positive_integer("n_haplotypes")
     positive_integer("time_bins")
@@ -485,6 +488,10 @@ def validate_config(cfg: Config) -> None:
     workers = integer("workers")
     if workers != -1 and workers < 1:
         raise ValueError("workers must be -1 or an integer greater than 0")
+
+    compression_level = integer("compression_level")
+    if not 0 <= compression_level <= 9:
+        raise ValueError("compression_level must be between 0 and 9")
 
     integer("seed")
     stdpopsim_contig_length = integer("stdpopsim_contig_length")

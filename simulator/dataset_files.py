@@ -38,8 +38,8 @@ not precomputed in the core dataset.
 - `metadata/samples.parquet`: optional summary parquet when the local environment supports it
 - `config.json` and `manifest.json`: generation config and dataset manifest
 
-Shard files are written with NumPy's lossless `np.savez_compressed` path by
-default. Missing genotypes are stored as sparse per-sample row-major indices
+Shard files are written as lossless NPZ archives using the configured DEFLATE
+level. Missing genotypes are stored as sparse per-sample row-major indices
 (`missing_flat_idx`, `missing_offsets`) rather than as a dense missing matrix.
 
 Targets are log-time bin averages, not midpoint samples. This keeps short

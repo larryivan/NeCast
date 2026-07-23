@@ -6,9 +6,10 @@ import json
 import math
 import os
 import time
+import zipfile
 from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import contextmanager
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -146,8 +147,67 @@ def concat_with_offsets(arrs: list[np.ndarray], dtype=None) -> tuple[np.ndarray,
     return data, np.array(offsets, dtype=np.int64)
 
 
-def write_shard(samples: list[dict], out_path: Path, cfg: Config) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+_PER_SAMPLE_ARRAYS = (
+    "sample_id",
+    "source_id",
+    "demography_id",
+    "target_log10_ne",
+    "sequence_length",
+)
+_GLOBAL_ARRAYS = (
+    "missing_storage",
+    "packed_hap_bytes",
+    "n_haplotypes",
+)
+_OFFSET_ARRAY_PAIRS = (
+    ("variant_positions_bp", "variant_offsets"),
+    ("missing_flat_idx", "missing_offsets"),
+    ("obs_rec_pos", "obs_rec_pos_offsets"),
+    ("obs_rec_rate", "obs_rec_rate_offsets"),
+    ("obs_mut_pos", "obs_mut_pos_offsets"),
+    ("obs_mut_rate", "obs_mut_rate_offsets"),
+    ("true_rec_pos", "true_rec_pos_offsets"),
+    ("true_rec_rate", "true_rec_rate_offsets"),
+    ("true_mut_pos", "true_mut_pos_offsets"),
+    ("true_mut_rate", "true_mut_rate_offsets"),
+)
+_BASE_ARRAY_ORDER = (
+    "sample_id",
+    "source_id",
+    "demography_id",
+    "target_log10_ne",
+    "variant_positions_bp",
+    "variant_offsets",
+    "genotype_packed",
+    "missing_flat_idx",
+    "missing_offsets",
+    "missing_storage",
+    "packed_hap_bytes",
+    "n_haplotypes",
+    "sequence_length",
+    "obs_rec_pos",
+    "obs_rec_pos_offsets",
+    "obs_rec_rate",
+    "obs_rec_rate_offsets",
+    "obs_mut_pos",
+    "obs_mut_pos_offsets",
+    "obs_mut_rate",
+    "obs_mut_rate_offsets",
+)
+_TRUTH_ARRAY_ORDER = (
+    "true_rec_pos",
+    "true_rec_pos_offsets",
+    "true_rec_rate",
+    "true_rec_rate_offsets",
+    "true_mut_pos",
+    "true_mut_pos_offsets",
+    "true_mut_rate",
+    "true_mut_rate_offsets",
+)
+_FRAGMENT_DIRNAME = ".fragments"
+
+
+def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
     ids = np.array([s["sample_id"] for s in samples], dtype="U64")
     source_ids = np.array([s["source_id"] for s in samples], dtype=np.int16)
     demo_ids = np.array([s["demo_id"] for s in samples], dtype=np.int16)
@@ -165,7 +225,7 @@ def write_shard(samples: list[dict], out_path: Path, cfg: Config) -> None:
     obs_mut_pos, obs_mut_pos_offsets = concat_with_offsets([s["obs_mut_pos"] for s in samples], dtype=np.float32)
     obs_mut_rate, obs_mut_rate_offsets = concat_with_offsets([s["obs_mut_rate"] for s in samples], dtype=np.float32)
 
-    save_kwargs = dict(
+    arrays = dict(
         sample_id=ids,
         source_id=source_ids,
         demography_id=demo_ids,
@@ -193,7 +253,7 @@ def write_shard(samples: list[dict], out_path: Path, cfg: Config) -> None:
         true_rec_rate, true_rec_rate_offsets = concat_with_offsets([s["true_rec_rate"] for s in samples], dtype=np.float32)
         true_mut_pos, true_mut_pos_offsets = concat_with_offsets([s["true_mut_pos"] for s in samples], dtype=np.float32)
         true_mut_rate, true_mut_rate_offsets = concat_with_offsets([s["true_mut_rate"] for s in samples], dtype=np.float32)
-        save_kwargs.update(
+        arrays.update(
             true_rec_pos=true_rec_pos,
             true_rec_pos_offsets=true_rec_pos_offsets,
             true_rec_rate=true_rec_rate,
@@ -203,13 +263,41 @@ def write_shard(samples: list[dict], out_path: Path, cfg: Config) -> None:
             true_mut_rate=true_mut_rate,
             true_mut_rate_offsets=true_mut_rate_offsets,
         )
+    return arrays
+
+
+def _write_npz_arrays(out_path: Path, arrays: dict[str, np.ndarray], cfg: Config) -> None:
+    """Write an NPZ with an explicit, low-overhead DEFLATE level."""
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    compression = zipfile.ZIP_DEFLATED if cfg.compression else zipfile.ZIP_STORED
+    zip_kwargs = {
+        "mode": "w",
+        "compression": compression,
+        "allowZip64": True,
+    }
     if cfg.compression:
-        np.savez_compressed(out_path, **save_kwargs)
-    else:
-        np.savez(out_path, **save_kwargs)
+        zip_kwargs["compresslevel"] = cfg.compression_level
+    with zipfile.ZipFile(out_path, **zip_kwargs) as archive:
+        for name, array in arrays.items():
+            with archive.open(f"{name}.npy", mode="w", force_zip64=True) as member:
+                np.lib.format.write_array(
+                    member,
+                    np.asanyarray(array),
+                    allow_pickle=False,
+                )
+
+
+def write_shard(samples: list[dict], out_path: Path, cfg: Config) -> None:
+    _write_npz_arrays(out_path, _shard_arrays(samples, cfg), cfg)
 
     meta_path = out_path.with_suffix(".jsonl.gz")
-    with gzip.open(meta_path, "wt", encoding="utf-8") as f:
+    with gzip.open(
+        meta_path,
+        "wt",
+        encoding="utf-8",
+        compresslevel=cfg.compression_level,
+    ) as f:
         for s in samples:
             f.write(safe_json_dumps(s["metadata"]) + "\n")
 
@@ -246,6 +334,51 @@ def _shard_tasks(n_samples: int, shard_size: int) -> list[tuple[int, int, int]]:
     return tasks
 
 
+def _fragment_dir(samples_dir: Path) -> Path:
+    return samples_dir / _FRAGMENT_DIRNAME
+
+
+def _fragment_npz_path(samples_dir: Path, chunk_idx: int) -> Path:
+    return _fragment_dir(samples_dir) / f"fragment_{chunk_idx:08d}.npz"
+
+
+def _compute_tasks(
+    n_samples: int,
+    shard_size: int,
+    compute_chunk_size: int,
+) -> list[tuple[int, int, int, int]]:
+    """Split every final shard into independently scheduled contiguous chunks."""
+
+    tasks: list[tuple[int, int, int, int]] = []
+    chunk_idx = 0
+    for shard_idx, shard_start, shard_count in _shard_tasks(n_samples, shard_size):
+        shard_end = shard_start + shard_count
+        for start in range(shard_start, shard_end, compute_chunk_size):
+            count = min(compute_chunk_size, shard_end - start)
+            tasks.append((chunk_idx, shard_idx, start, count))
+            chunk_idx += 1
+    return tasks
+
+
+_GENERATION_WORKER_CFG: Config | None = None
+
+
+def _init_generation_worker(
+    cfg_dict: dict,
+    empirical: EmpiricalMapStore | None = None,
+    empirical_shared_spec=None,
+) -> None:
+    global _GENERATION_WORKER_CFG
+    _GENERATION_WORKER_CFG = Config(**cfg_dict)
+    init_worker(cfg_dict, empirical, empirical_shared_spec)
+
+
+def _generation_worker_cfg() -> Config:
+    if _GENERATION_WORKER_CFG is None:
+        raise RuntimeError("shard worker was not initialized")
+    return _GENERATION_WORKER_CFG
+
+
 def _count_key(counts: dict[str, int], key: str) -> None:
     counts[key] = counts.get(key, 0) + 1
 
@@ -263,12 +396,11 @@ def _shard_file_bytes(path: Path) -> int:
     return total
 
 
-def _generate_shard(task: tuple[int, int, int, dict]) -> dict:
-    shard_idx, start, count, cfg_dict = task
-    cfg = Config(**cfg_dict)
+def _generate_shard(task: tuple[int, int, int, int]) -> dict:
+    chunk_idx, shard_idx, start, count = task
+    cfg = _generation_worker_cfg()
     samples: list[dict] = []
     metadata_rows: list[dict] = []
-    full_metadata: list[dict] = []
     source_counts: dict[str, int] = {}
     demo_counts: dict[str, int] = {}
     map_counts: dict[str, int] = {}
@@ -294,17 +426,17 @@ def _generate_shard(task: tuple[int, int, int, dict]) -> dict:
         _count_key(demo_counts, demo)
         _count_key(map_counts, map_mode)
         metadata_rows.append(_metadata_row(meta))
-        full_metadata.append(meta)
 
-    out_path = _shard_npz_path(Path(cfg.out_dir) / "samples", shard_idx)
+    out_path = _fragment_npz_path(Path(cfg.out_dir) / "samples", chunk_idx)
     _atomic_write_shard(samples, out_path, cfg)
     shard_sec = time.perf_counter() - shard_t0
     return {
+        "chunk_idx": int(chunk_idx),
         "shard_idx": int(shard_idx),
         "start": int(start),
         "n_samples": int(count),
-        "shard_path": (Path("samples") / out_path.name).as_posix(),
-        "shard_bytes": int(_shard_file_bytes(out_path)),
+        "fragment_path": out_path.relative_to(Path(cfg.out_dir)).as_posix(),
+        "fragment_bytes": int(_shard_file_bytes(out_path)),
         "shard_sec": float(shard_sec),
         "mean_sample_sec": float(sample_time_sum / max(1, count)),
         "max_sample_sec": float(max_sample_sec),
@@ -313,11 +445,209 @@ def _generate_shard(task: tuple[int, int, int, dict]) -> dict:
         "slowest_n_variants": int(slowest_meta.get("n_variants", 0)),
         "slowest_max_Ne": float(slowest_meta.get("max_Ne", 0.0)),
         "metadata_rows": metadata_rows,
-        "full_metadata": full_metadata,
         "source_counts": source_counts,
         "demography_counts": demo_counts,
         "map_counts": map_counts,
     }
+
+
+def _concatenate_offset_array(
+    datasets: list,
+    data_key: str,
+    offsets_key: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    pieces: list[np.ndarray] = []
+    offsets = [0]
+    total = 0
+    for data in datasets:
+        piece = np.asarray(data[data_key])
+        source_offsets = np.asarray(data[offsets_key], dtype=np.int64)
+        if (
+            source_offsets.ndim != 1
+            or len(source_offsets) == 0
+            or int(source_offsets[0]) != 0
+            or int(source_offsets[-1]) != len(piece)
+        ):
+            raise ValueError(f"fragment has invalid {offsets_key}")
+        pieces.append(piece)
+        offsets.extend((source_offsets[1:] + total).tolist())
+        total += len(piece)
+    return np.concatenate(pieces, axis=0), np.asarray(offsets, dtype=np.int64)
+
+
+def _arrays_from_fragments(
+    fragment_paths: list[Path],
+    cfg: Config,
+    expected_start: int,
+    expected_count: int,
+) -> dict[str, np.ndarray]:
+    array_order = _BASE_ARRAY_ORDER + (_TRUTH_ARRAY_ORDER if cfg.include_truth else ())
+    expected_keys = set(array_order)
+    with ExitStack() as stack:
+        datasets = [
+            stack.enter_context(np.load(path, allow_pickle=False))
+            for path in fragment_paths
+        ]
+        for path, data in zip(fragment_paths, datasets, strict=True):
+            if set(data.files) != expected_keys:
+                missing = expected_keys - set(data.files)
+                extra = set(data.files) - expected_keys
+                raise ValueError(
+                    f"fragment {path} has incompatible arrays "
+                    f"(missing={sorted(missing)}, extra={sorted(extra)})"
+                )
+
+        values: dict[str, np.ndarray] = {}
+        for key in _PER_SAMPLE_ARRAYS:
+            values[key] = np.concatenate(
+                [np.asarray(data[key]) for data in datasets],
+                axis=0,
+            )
+        for key in _GLOBAL_ARRAYS:
+            reference = np.asarray(datasets[0][key])
+            for data in datasets[1:]:
+                candidate = np.asarray(data[key])
+                if (
+                    reference.dtype != candidate.dtype
+                    or reference.shape != candidate.shape
+                    or reference.tobytes() != candidate.tobytes()
+                ):
+                    raise ValueError(f"fragments disagree on global array {key}")
+            values[key] = reference
+
+        for data_key, offsets_key in _OFFSET_ARRAY_PAIRS:
+            if data_key not in expected_keys:
+                continue
+            values[data_key], values[offsets_key] = _concatenate_offset_array(
+                datasets,
+                data_key,
+                offsets_key,
+            )
+        values["genotype_packed"] = np.concatenate(
+            [np.asarray(data["genotype_packed"]) for data in datasets],
+            axis=0,
+        )
+
+        expected_ids = [
+            f"sim_{index:08d}"
+            for index in range(expected_start, expected_start + expected_count)
+        ]
+        actual_ids = values["sample_id"].astype(str).tolist()
+        if actual_ids != expected_ids:
+            raise ValueError("fragment sample IDs do not cover the final shard range")
+        if values["target_log10_ne"].shape[0] != expected_count:
+            raise ValueError("fragments do not contain the expected number of samples")
+        if len(values["genotype_packed"]) != len(values["variant_positions_bp"]):
+            raise ValueError("fragment genotype and variant arrays are misaligned")
+        return {key: values[key] for key in array_order}
+
+
+def _stream_gzip_members(
+    source_paths: list[Path],
+    out_path: Path,
+    *,
+    compression_level: int,
+) -> int:
+    """Transcode ordered gzip members into one bounded-memory gzip stream."""
+
+    line_count = 0
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(out_path, "wb", compresslevel=compression_level) as target:
+        for source_path in source_paths:
+            with gzip.open(source_path, "rb") as source:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    line_count += chunk.count(b"\n")
+                    target.write(chunk)
+    return line_count
+
+
+def _merge_fragment_group(
+    results: list[dict],
+    final_task: tuple[int, int, int],
+    cfg: Config,
+) -> dict:
+    shard_idx, start, count = final_task
+    ordered = sorted(results, key=lambda result: int(result["start"]))
+    cursor = start
+    for result in ordered:
+        if int(result["shard_idx"]) != shard_idx or int(result["start"]) != cursor:
+            raise ValueError(f"fragment coverage for shard {shard_idx} is not contiguous")
+        cursor += int(result["n_samples"])
+    if cursor != start + count:
+        raise ValueError(f"fragment coverage for shard {shard_idx} is incomplete")
+
+    out_dir = Path(cfg.out_dir)
+    fragment_paths = [out_dir / str(result["fragment_path"]) for result in ordered]
+    out_path = _shard_npz_path(out_dir / "samples", shard_idx)
+    final_meta = out_path.with_suffix(".jsonl.gz")
+    if len(fragment_paths) == 1:
+        fragment_path = fragment_paths[0]
+        fragment_meta = fragment_path.with_suffix(".jsonl.gz")
+        fragment_path.replace(out_path)
+        fragment_meta.replace(final_meta)
+        return {
+            "shard_idx": int(shard_idx),
+            "shard_path": (Path("samples") / out_path.name).as_posix(),
+            "shard_bytes": int(_shard_file_bytes(out_path)),
+        }
+
+    arrays = _arrays_from_fragments(fragment_paths, cfg, start, count)
+    tmp_path = _tmp_npz_path(out_path)
+    tmp_meta = tmp_path.with_suffix(".jsonl.gz")
+    for path in (tmp_path, tmp_meta):
+        if path.exists():
+            path.unlink()
+    _write_npz_arrays(tmp_path, arrays, cfg)
+    metadata_rows = _stream_gzip_members(
+        [path.with_suffix(".jsonl.gz") for path in fragment_paths],
+        tmp_meta,
+        compression_level=cfg.compression_level,
+    )
+    if metadata_rows != count:
+        raise ValueError(
+            f"fragment metadata for shard {shard_idx} has {metadata_rows} rows, expected {count}"
+        )
+    tmp_path.replace(out_path)
+    tmp_meta.replace(final_meta)
+    return {
+        "shard_idx": int(shard_idx),
+        "shard_path": (Path("samples") / out_path.name).as_posix(),
+        "shard_bytes": int(_shard_file_bytes(out_path)),
+    }
+
+
+def _bounded_process_results(
+    executor: ProcessPoolExecutor,
+    jobs: list[tuple[int, int, int, int]],
+    *,
+    max_in_flight: int,
+) -> Iterator[dict]:
+    iterator = iter(jobs)
+    pending = {}
+
+    def fill() -> None:
+        while len(pending) < max_in_flight:
+            try:
+                job = next(iterator)
+            except StopIteration:
+                return
+            pending[executor.submit(_generate_shard, job)] = job
+
+    fill()
+    try:
+        while pending:
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                pending.pop(future)
+                yield future.result()
+            fill()
+    except BaseException:
+        for future in pending:
+            future.cancel()
+        raise
 
 
 def _metadata_row(meta: dict) -> dict:
@@ -387,23 +717,49 @@ def _metadata_row(meta: dict) -> dict:
     }
 
 
-def _write_metadata(metadata_rows: list[dict], full_metadata: list[dict], out_dir: Path) -> dict:
+def _write_metadata(
+    metadata_rows: list[dict],
+    shard_paths: list[str],
+    out_dir: Path,
+    cfg: Config,
+) -> dict:
     meta_dir = out_dir / "metadata"
     meta_dir.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(metadata_rows)
-    df.to_csv(meta_dir / "samples.csv", index=False)
+    csv_path = meta_dir / "samples.csv"
+    csv_tmp = csv_path.with_name(f"{csv_path.name}.tmp")
+    df.to_csv(csv_tmp, index=False)
+    csv_tmp.replace(csv_path)
     paths = {
         "summary_csv": "metadata/samples.csv",
         "full_jsonl_gz": "metadata/samples.jsonl.gz",
     }
+    parquet_path = meta_dir / "samples.parquet"
+    parquet_tmp = parquet_path.with_name(f"{parquet_path.name}.tmp")
     try:
-        df.to_parquet(meta_dir / "samples.parquet", index=False)
+        df.to_parquet(parquet_tmp, index=False)
+        parquet_tmp.replace(parquet_path)
         paths["summary_parquet"] = "metadata/samples.parquet"
     except Exception:
-        pass
-    with gzip.open(meta_dir / "samples.jsonl.gz", "wt", encoding="utf-8") as f:
-        for meta in full_metadata:
-            f.write(safe_json_dumps(meta) + "\n")
+        if parquet_tmp.exists():
+            parquet_tmp.unlink()
+
+    full_path = meta_dir / "samples.jsonl.gz"
+    full_tmp = full_path.with_name(f"{full_path.name}.tmp")
+    metadata_count = _stream_gzip_members(
+        [
+            (out_dir / relative_path).with_suffix(".jsonl.gz")
+            for relative_path in shard_paths
+        ],
+        full_tmp,
+        compression_level=cfg.compression_level,
+    )
+    if metadata_count != len(metadata_rows):
+        raise RuntimeError(
+            f"aggregate metadata contains {metadata_count} rows, "
+            f"expected {len(metadata_rows)}"
+        )
+    full_tmp.replace(full_path)
     return paths
 
 
@@ -562,6 +918,20 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
             raise _artifact_reuse_error(f"aggregate metadata file {relative!r} is missing or empty")
 
 
+def _remove_fragment_artifacts(path: Path) -> int:
+    if not path.exists() and not path.is_symlink():
+        return 0
+    if path.is_file() or path.is_symlink():
+        path.unlink()
+        return 1
+
+    removed = 0
+    for child in path.iterdir():
+        removed += _remove_fragment_artifacts(child)
+    path.rmdir()
+    return removed
+
+
 def _prepare_generation_output(out_dir: Path, samples_dir: Path, done: Path) -> None:
     """Invalidate completion first, then remove artifacts from incomplete runs."""
 
@@ -582,6 +952,7 @@ def _prepare_generation_output(out_dir: Path, samples_dir: Path, done: Path) -> 
 
     for path in samples_dir.glob("shard_*"):
         unlink_file(path)
+    removed += _remove_fragment_artifacts(_fragment_dir(samples_dir))
     metadata_dir = out_dir / "metadata"
     if metadata_dir.exists():
         for path in metadata_dir.glob("samples.*"):
@@ -688,32 +1059,45 @@ def _generate_dataset_locked(cfg: Config, empirical: EmpiricalMapStore) -> dict:
     _prepare_generation_output(out_dir, samples_dir, done)
 
     shard_jobs = _shard_tasks(n, cfg.shard_size)
-    workers = min(resolve_workers(cfg.workers), max(1, len(shard_jobs)))
-    print(f"[generate] samples n={n} shard_size={cfg.shard_size} shards={len(shard_jobs)} workers={workers}")
+    resolved_workers = resolve_workers(cfg.workers)
+    effective_chunk_size = (
+        cfg.shard_size if resolved_workers == 1 else cfg.compute_chunk_size
+    )
+    compute_jobs = _compute_tasks(n, cfg.shard_size, effective_chunk_size)
+    workers = min(resolved_workers, max(1, len(compute_jobs)))
+    print(
+        f"[generate] samples n={n} shard_size={cfg.shard_size} "
+        f"compute_chunk_size={effective_chunk_size} "
+        f"shards={len(shard_jobs)} chunks={len(compute_jobs)} workers={workers}"
+    )
     cfg_dict = dataclasses.asdict(cfg)
+    _fragment_dir(samples_dir).mkdir(parents=True, exist_ok=True)
 
-    shard_results: dict[int, dict] = {}
+    fragment_results: dict[int, list[dict]] = {}
     metadata_rows: list[dict] = []
-    full_metadata: list[dict] = []
     source_counts: dict[str, int] = {}
     demo_counts: dict[str, int] = {}
     map_counts: dict[str, int] = {}
     completed_samples = 0
-    completed_bytes = 0
+    completed_fragment_bytes = 0
 
-    def handle_shard_result(result: dict, progress: tqdm) -> None:
-        nonlocal completed_samples, completed_bytes
-        shard_results[int(result["shard_idx"])] = result
+    def handle_chunk_result(result: dict, progress: tqdm) -> None:
+        nonlocal completed_samples, completed_fragment_bytes
         completed_samples += int(result["n_samples"])
-        completed_bytes += int(result["shard_bytes"])
-        avg_bytes = completed_bytes / max(1, completed_samples)
+        completed_fragment_bytes += int(result["fragment_bytes"])
+        avg_bytes = completed_fragment_bytes / max(1, completed_samples)
         est_total_bytes = avg_bytes * n
+        metadata_rows.extend(result.pop("metadata_rows"))
+        _merge_counts(source_counts, result.pop("source_counts"))
+        _merge_counts(demo_counts, result.pop("demography_counts"))
+        _merge_counts(map_counts, result.pop("map_counts"))
+        fragment_results.setdefault(int(result["shard_idx"]), []).append(result)
         progress.update(int(result["n_samples"]))
         progress.set_postfix(
             {
-                "disk_GB": f"{completed_bytes / 1e9:.1f}",
+                "disk_GB": f"{completed_fragment_bytes / 1e9:.1f}",
                 "est_GB": f"{est_total_bytes / 1e9:.1f}",
-                "shard_s": f"{float(result.get('shard_sec', 0.0)):.0f}",
+                "chunk_s": f"{float(result.get('shard_sec', 0.0)):.0f}",
                 "mean_s": f"{float(result.get('mean_sample_sec', 0.0)):.1f}",
                 "max_s": f"{float(result.get('max_sample_sec', 0.0)):.1f}",
                 "slow": str(result.get("slowest_demography_type", ""))[:18],
@@ -729,40 +1113,47 @@ def _generate_dataset_locked(cfg: Config, empirical: EmpiricalMapStore) -> dict:
         try:
             with ProcessPoolExecutor(
                 max_workers=workers,
-                initializer=init_worker,
+                initializer=_init_generation_worker,
                 initargs=(cfg_dict, None, shared_spec),
             ) as ex:
-                futures = {
-                    ex.submit(_generate_shard, (shard_idx, start, count, cfg_dict)): shard_idx
-                    for shard_idx, start, count in shard_jobs
-                }
                 with tqdm(total=n, desc="simulate samples", unit="sample") as progress:
-                    for fut in as_completed(futures):
-                        handle_shard_result(fut.result(), progress)
+                    for result in _bounded_process_results(
+                        ex,
+                        compute_jobs,
+                        max_in_flight=min(len(compute_jobs), 4 * workers),
+                    ):
+                        handle_chunk_result(result, progress)
         finally:
             release_shared_memory(shared_handles, unlink=True)
     else:
-        init_worker(cfg_dict, empirical=empirical)
+        _init_generation_worker(cfg_dict, empirical=empirical)
         with tqdm(total=n, desc="simulate samples", unit="sample") as progress:
-            for shard_idx, start, count in shard_jobs:
-                handle_shard_result(_generate_shard((shard_idx, start, count, cfg_dict)), progress)
+            for job in compute_jobs:
+                handle_chunk_result(_generate_shard(job), progress)
 
     shard_paths: list[str] = []
-    for shard_idx in sorted(shard_results):
-        result = shard_results[shard_idx]
+    completed_bytes = 0
+    for final_task in shard_jobs:
+        shard_idx = final_task[0]
+        shard_fragments = fragment_results.get(shard_idx, [])
+        result = _merge_fragment_group(
+            shard_fragments,
+            final_task,
+            cfg,
+        )
         shard_paths.append(result["shard_path"])
-        metadata_rows.extend(result["metadata_rows"])
-        full_metadata.extend(result["full_metadata"])
-        _merge_counts(source_counts, result["source_counts"])
-        _merge_counts(demo_counts, result["demography_counts"])
-        _merge_counts(map_counts, result["map_counts"])
+        completed_bytes += int(result["shard_bytes"])
+        for fragment in shard_fragments:
+            fragment_path = out_dir / str(fragment["fragment_path"])
+            _remove_fragment_artifacts(fragment_path)
+            _remove_fragment_artifacts(fragment_path.with_suffix(".jsonl.gz"))
     metadata_rows.sort(key=lambda row: int(row.get("sample_index", 0)))
-    full_metadata.sort(key=lambda meta: int(meta.get("sample_index", 0)))
 
-    if len(metadata_rows) != n:
+    if completed_samples != n or len(metadata_rows) != n:
         raise RuntimeError(f"generated {len(metadata_rows)} samples, expected {n}")
 
-    metadata_paths = _write_metadata(metadata_rows, full_metadata, out_dir)
+    metadata_paths = _write_metadata(metadata_rows, shard_paths, out_dir, cfg)
+    _remove_fragment_artifacts(_fragment_dir(samples_dir))
     avg_bytes_per_sample = completed_bytes / max(1, len(metadata_rows))
     samples_gb = completed_bytes / 1e9
     avg_mb_per_sample = avg_bytes_per_sample / 1e6

@@ -16,6 +16,7 @@ DONE_CONFIG_STATE_KEY = "sample_generation_config"
 RUNTIME_CONFIG_FIELDS = frozenset(
     {
         "dataset_name",
+        "compute_chunk_size",
         "force",
         "out_dir",
         "workers",

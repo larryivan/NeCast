@@ -109,6 +109,51 @@ def test_force_invalidates_done_before_failed_regeneration(
     assert not list((out_dir / "samples").glob("shard_*"))
 
 
+def test_failed_chunk_generation_retains_fragments_until_safe_retry_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_dir = tmp_path / "dataset"
+    cfg = dataclasses.replace(
+        _config(out_dir),
+        n_samples=2,
+        shard_size=1,
+        compute_chunk_size=1,
+    )
+    original_generate_shard = shards._generate_shard
+    calls = 0
+
+    def fail_after_first_fragment(task):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("simulated chunk failure")
+        return original_generate_shard(task)
+
+    monkeypatch.setattr(shards, "_generate_shard", fail_after_first_fragment)
+    with pytest.raises(RuntimeError, match="simulated chunk failure"):
+        generate_dataset(cfg, EmpiricalMapStore())
+
+    fragment_dir = out_dir / "samples" / ".fragments"
+    assert not (out_dir / "samples" / "DONE.json").exists()
+    assert [path.name for path in fragment_dir.glob("fragment_*.npz")] == [
+        "fragment_00000000.npz"
+    ]
+    assert [path.name for path in fragment_dir.glob("fragment_*.jsonl.gz")] == [
+        "fragment_00000000.jsonl.gz"
+    ]
+
+    monkeypatch.setattr(shards, "_generate_shard", original_generate_shard)
+    manifest = generate_dataset(cfg, EmpiricalMapStore())
+
+    assert manifest["n_samples"] == 2
+    assert manifest["shards"] == [
+        "samples/shard_00000.npz",
+        "samples/shard_00001.npz",
+    ]
+    assert not fragment_dir.exists()
+
+
 def test_invalid_force_config_is_rejected_before_existing_done_is_touched(
     tmp_path: Path,
 ) -> None:

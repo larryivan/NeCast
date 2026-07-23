@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pandas.io.common import infer_compression
 
 from .config import MAX_MSPRIME_RATE, Config
 
@@ -116,11 +117,30 @@ def _canonical_chrom(value) -> str:
     return f"chr{text}"
 
 
-def _read_table_maybe_gzip(path: str) -> pd.DataFrame:
+def _read_table_maybe_gzip(
+    path: str,
+    *,
+    compression: str | None = None,
+) -> pd.DataFrame:
     kwargs = dict(sep=r"\s+", comment="#", header=None, dtype=str)
-    if path.endswith(".gz"):
-        kwargs["compression"] = "gzip"
+    if compression is None:
+        if path.endswith(".gz"):
+            kwargs["compression"] = "gzip"
+    elif not isinstance(compression, str) or not compression:
+        raise ValueError(f"Unsupported empirical-map compression: {compression}")
+    else:
+        kwargs["compression"] = None if compression == "none" else compression
     return pd.read_csv(path, **kwargs)
+
+
+def _inferred_map_compression(path: Path) -> str:
+    """Match the legacy filename-based pandas decompression semantics."""
+
+    path_text = str(path)
+    if path_text.endswith(".gz"):
+        return "gzip"
+    inferred = infer_compression(path_text, "infer")
+    return str(inferred) if inferred is not None else "none"
 
 
 ROULETTE_RAW_TO_PER_GEN = 1.015e-7
@@ -320,6 +340,8 @@ def load_empirical_rate_table(
     map_kind: str = "generic",
     rate_unit: str = "per_bp",
     scale_to_baseline: bool = True,
+    *,
+    compression: str | None = None,
 ) -> dict[str, PiecewiseRateMap]:
     """Load BED-like or position-rate maps, preserving chromosome boundaries.
 
@@ -331,7 +353,7 @@ def load_empirical_rate_table(
     with midpoint cuts. Missing interval gaps are filled with baseline_rate so
     the returned map can be passed to msprime after slicing.
     """
-    df = _read_table_maybe_gzip(path)
+    df = _read_table_maybe_gzip(path, compression=compression)
     maps: dict[str, PiecewiseRateMap] = {}
 
     if df.shape[1] >= 4:
@@ -387,6 +409,48 @@ def load_empirical_rate_table(
     return maps
 
 
+def _load_empirical_rate_table_cached(
+    path: str | Path,
+    baseline_rate: float | None,
+    map_kind: str,
+    rate_unit: str,
+    scale_to_baseline: bool,
+) -> dict[str, PiecewiseRateMap]:
+    from . import config as config_module
+    from .map_cache import load_or_build_rate_maps
+
+    parser_path = Path(path).expanduser()
+    if not parser_path.is_absolute():
+        parser_path = Path.cwd() / parser_path
+    resolved_source = parser_path.resolve(strict=True)
+    compression = _inferred_map_compression(parser_path)
+    parse_parameters = {
+        "parser": "load_empirical_rate_table",
+        "compression": compression,
+        "baseline_rate": baseline_rate,
+        "map_kind": map_kind,
+        "rate_unit": rate_unit,
+        "scale_to_baseline": scale_to_baseline,
+    }
+    return load_or_build_rate_maps(
+        source_path=resolved_source,
+        parse_parameters=parse_parameters,
+        related_code_paths={
+            "empirical_maps_parser": Path(__file__),
+            "rate_validation_config": Path(config_module.__file__),
+        },
+        builder=lambda snapshot: load_empirical_rate_table(
+            str(snapshot),
+            baseline_rate,
+            map_kind=map_kind,
+            rate_unit=rate_unit,
+            scale_to_baseline=scale_to_baseline,
+            compression=compression,
+        ),
+        map_class=PiecewiseRateMap,
+    )
+
+
 def _summarize_maps(path: str, maps: dict[str, PiecewiseRateMap], requested_unit: str) -> dict:
     methods = sorted({m.scaling_method for m in maps.values()})
     formats = sorted({m.source_format for m in maps.values()})
@@ -425,8 +489,8 @@ def load_empirical_maps(cfg: Config) -> EmpiricalMapStore:
     mut_path = _resolve_map_path(cfg.mut_map)
     if recomb_path is not None:
         print(f"[maps] loading empirical recombination map: {recomb_path}")
-        store.rec_maps = load_empirical_rate_table(
-            str(recomb_path),
+        store.rec_maps = _load_empirical_rate_table_cached(
+            recomb_path,
             cfg.baseline_rec,
             map_kind="recombination",
             rate_unit=cfg.recomb_map_unit,
@@ -435,8 +499,8 @@ def load_empirical_maps(cfg: Config) -> EmpiricalMapStore:
         store.metadata["recombination"] = _summarize_maps(str(recomb_path), store.rec_maps, cfg.recomb_map_unit)
     if mut_path is not None:
         print(f"[maps] loading empirical mutation map: {mut_path}")
-        store.mut_maps = load_empirical_rate_table(
-            str(mut_path),
+        store.mut_maps = _load_empirical_rate_table_cached(
+            mut_path,
             cfg.baseline_mu,
             map_kind="mutation",
             rate_unit=cfg.mut_map_unit,

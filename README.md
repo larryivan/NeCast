@@ -86,6 +86,18 @@ measure memory, runtime, and disk use. With multiple workers, parsed empirical
 map arrays are placed in read-only shared memory rather than loaded once per
 worker.
 
+The first empirical-map load builds a content-addressed binary cache. Later
+runs verify the source-file, parser, dependency, and cached-array hashes before
+memory-mapping the cached arrays. Set `DLCOALSIM_CACHE_DIR` to place this cache
+somewhere other than the platform user-cache directory.
+
+Simulation work is scheduled in bounded chunks independently of the final shard
+layout. `--compute-chunk-size` controls that scheduling granularity without
+changing sample seeds or final arrays; single-worker runs automatically use one
+compute task per final shard. Shards use lossless DEFLATE level 1 by default.
+Use `--compression-level 0..9` to trade write time for file size without
+changing any decoded array values.
+
 Unavailable empirical map or human-`Ne` template components are reported and
 their weights are disabled only when another configured source remains. If an
 unavailable component is the sole source, generation stops. Explicitly enabled

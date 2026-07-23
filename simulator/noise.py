@@ -34,7 +34,8 @@ def apply_phase_switch_errors(
     rng: np.random.Generator,
     switch_rate_per_bp: float,
 ) -> tuple[np.ndarray, dict]:
-    X = (G > 0).astype(np.uint8, copy=True)
+    X = np.empty_like(G, dtype=np.uint8, order="K", subok=True)
+    np.greater(G, 0, out=X)
     stats = {
         "phase_switch_count": 0,
         "phase_switch_pair_count": 0,
@@ -103,4 +104,5 @@ def apply_genotype_noise(
 def pack_haplotypes(G: np.ndarray, n_haplotypes: int) -> np.ndarray:
     if G.shape[1] != n_haplotypes:
         raise ValueError(f"Expected H={n_haplotypes}, got {G.shape[1]}")
-    return np.packbits(G.astype(np.uint8), axis=1, bitorder="little")
+    packed_input = G if G.dtype == np.uint8 else G.astype(np.uint8)
+    return np.packbits(packed_input, axis=1, bitorder="little")

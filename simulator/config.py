@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from numbers import Integral, Real
+from pathlib import Path
 
 
 SOURCE_IDS = {
@@ -49,6 +52,66 @@ ID_TO_DEMO = {v: k for k, v in DEMO_IDS.items()}
 
 DEFAULT_RECOMB_MAP = "maps/recomb_map/output/palsson_2025_autosomes_hg38.bed"
 DEFAULT_MUT_MAP = "maps/mut_map/output/roulette_2023_autosomes_hg38_1000bp.bed"
+
+SOURCE_PROB_FIELDS = (
+    "p_clean_constant",
+    "p_random_global",
+    "p_custom_hetero",
+    "p_empirical_slice",
+    "p_stdpopsim_anchor",
+)
+
+EMPIRICAL_NE_SOURCE_KEYS = frozenset(
+    {
+        "smcpp_1kg",
+        "phlash_unified",
+        "phlash_super",
+        "msmc2_example",
+        "msmc_im_example",
+    }
+)
+
+DEMOGRAPHY_PROB_FIELDS = (
+    "p_constant",
+    "p_near_constant",
+    "p_smooth_random_walk",
+    "p_dense_random_walk",
+    "p_dense_multiscale_random_walk",
+    "p_dense_recent_wiggle",
+    "p_classic_sawtooth",
+    "p_empirical_human_ne_template",
+    "p_smooth_random_walk_stress",
+    "p_dense_random_walk_stress",
+    "p_ultra_stress",
+    "p_single_bottleneck",
+    "p_recent_bottleneck",
+    "p_recent_bottleneck_extreme",
+    "p_recent_founder_recovery",
+    "p_founder_recovery_extreme",
+    "p_continuous_exponential_growth",
+    "p_rapid_recent_growth_extreme",
+    "p_continuous_exponential_decline",
+    "p_three_epoch",
+    "p_serial_founder",
+    "p_serial_founder_extreme",
+    "p_ancient_event",
+    "p_ancient_recent_compound",
+    "p_ancient_recent_conflict",
+    "p_oscillating_mild",
+    "p_zigzag_strong",
+    "p_expansion",
+    "p_contraction",
+    "p_zigzag",
+)
+
+UINT32_MAX = 2**32 - 1
+INT16_MAX = 2**15 - 1
+FLOAT32_MAX = float.fromhex("0x1.fffffep+127")
+FLOAT32_MIN_POSITIVE = 2.0**-149
+MAX_MSPRIME_RATE = 1.0e-4
+MAX_SYNTHETIC_RATE_MULTIPLIER = 200.0
+MAX_BASELINE_RATE = MAX_MSPRIME_RATE / MAX_SYNTHETIC_RATE_MULTIPLIER
+
 
 @dataclass
 class Config:
@@ -186,7 +249,255 @@ def apply_preset(cfg: Config) -> Config:
 
 
 def validate_config(cfg: Config) -> None:
-    if cfg.n_haplotypes < 2:
+    def nonempty_string(name: str) -> str:
+        value = getattr(cfg, name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        return value
+
+    def integer(name: str) -> int:
+        value = getattr(cfg, name)
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise ValueError(f"{name} must be an integer")
+        return int(value)
+
+    def finite(name: str) -> float:
+        value = getattr(cfg, name)
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise ValueError(f"{name} must be a finite number")
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError(f"{name} must be a finite number")
+        return result
+
+    def positive_integer(name: str) -> int:
+        value = integer(name)
+        if value <= 0:
+            raise ValueError(f"{name} must be greater than 0")
+        return value
+
+    def probability_range(min_name: str, max_name: str) -> None:
+        minimum = finite(min_name)
+        maximum = finite(max_name)
+        if not 0.0 <= minimum <= 1.0:
+            raise ValueError(f"{min_name} must be between 0 and 1")
+        if not 0.0 <= maximum <= 1.0:
+            raise ValueError(f"{max_name} must be between 0 and 1")
+        if minimum > maximum:
+            raise ValueError(f"{min_name} must not exceed {max_name}")
+
+    def nonnegative_range(min_name: str, max_name: str) -> None:
+        minimum = finite(min_name)
+        maximum = finite(max_name)
+        if minimum < 0.0:
+            raise ValueError(f"{min_name} must be non-negative")
+        if maximum < 0.0:
+            raise ValueError(f"{max_name} must be non-negative")
+        if minimum > maximum:
+            raise ValueError(f"{min_name} must not exceed {max_name}")
+
+    def boolean(name: str) -> bool:
+        value = getattr(cfg, name)
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be a boolean")
+        return value
+
+    def weight_group(name: str, fields: tuple[str, ...]) -> float:
+        total = 0.0
+        for field in fields:
+            value = finite(field)
+            if value < 0.0:
+                raise ValueError(f"{field} must be non-negative")
+            total += value
+        if not math.isfinite(total) or total <= 0.0:
+            raise ValueError(f"at least one {name} probability must be greater than 0")
+        return total
+
+    def empirical_ne_source_mix() -> None:
+        text = cfg.empirical_ne_template_source_mix
+        if not isinstance(text, str):
+            raise ValueError("empirical_ne_template_source_mix must be a string")
+
+        total = 0.0
+        found = False
+        seen: set[str] = set()
+        for raw_token in text.split(","):
+            token = raw_token.strip()
+            if not token:
+                continue
+            found = True
+            if ":" in token:
+                key, raw_weight = token.split(":", 1)
+                key = key.strip()
+                raw_weight = raw_weight.strip()
+                if not key or not raw_weight:
+                    raise ValueError(
+                        "empirical_ne_template_source_mix entries must use 'source[:weight]'"
+                    )
+                try:
+                    weight = float(raw_weight)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"empirical_ne_template_source_mix has a non-numeric weight for {key!r}"
+                    ) from exc
+            else:
+                key = token
+                weight = 1.0
+            if key not in EMPIRICAL_NE_SOURCE_KEYS:
+                supported = ", ".join(sorted(EMPIRICAL_NE_SOURCE_KEYS))
+                raise ValueError(
+                    f"empirical_ne_template_source_mix contains unknown source {key!r}; "
+                    f"supported sources: {supported}"
+                )
+            if key in seen:
+                raise ValueError(
+                    f"empirical_ne_template_source_mix contains duplicate source {key!r}"
+                )
+            seen.add(key)
+            if not math.isfinite(weight) or weight < 0.0:
+                raise ValueError(
+                    f"empirical_ne_template_source_mix weight for {key!r} must be finite and non-negative"
+                )
+            total += weight
+            if not math.isfinite(total):
+                raise ValueError("empirical_ne_template_source_mix weights sum to a non-finite value")
+        if not found or total <= 0.0:
+            raise ValueError(
+                "empirical_ne_template_source_mix must contain at least one positive source weight"
+            )
+
+    nonempty_string("dataset_name")
+    if cfg.preset not in {"mini", "core_v01", "full_v01"}:
+        raise ValueError("preset must be 'mini', 'core_v01', or 'full_v01'")
+    out_dir_text = nonempty_string("out_dir")
+    out_dir = Path(out_dir_text).expanduser().resolve()
+    protected_output_dirs = {
+        Path(out_dir.anchor).resolve(),
+        Path.home().resolve(),
+        Path(__file__).resolve().parents[1],
+    }
+    if out_dir in protected_output_dirs:
+        raise ValueError(
+            f"out_dir must be a dedicated dataset directory, not protected path {out_dir}"
+        )
+    nonempty_string("demography_mixture_version")
+    nonempty_string("empirical_ne_template_dir")
+    for name in ("recomb_map", "mut_map", "stdpopsim_models"):
+        value = getattr(cfg, name)
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be a string")
+    nonempty_string("stdpopsim_species")
+
+    positive_integer("n_samples")
+    positive_integer("shard_size")
+    seq_len = positive_integer("seq_len")
+    n_haplotypes = positive_integer("n_haplotypes")
+    positive_integer("time_bins")
+
+    if n_haplotypes < 2:
         raise ValueError("n_haplotypes must be at least 2")
-    if cfg.n_haplotypes % 2 != 0:
+    if n_haplotypes % 2 != 0:
         raise ValueError("n_haplotypes must be even because samples are simulated as diploid individuals")
+    if n_haplotypes > INT16_MAX:
+        raise ValueError(f"n_haplotypes must not exceed the int16 storage limit ({INT16_MAX})")
+    packed_hap_bytes = math.ceil(n_haplotypes / 8)
+    if packed_hap_bytes > INT16_MAX:
+        raise ValueError(f"packed haplotype width must not exceed the int16 storage limit ({INT16_MAX})")
+
+    if seq_len > UINT32_MAX:
+        raise ValueError(f"seq_len must not exceed the uint32 position limit ({UINT32_MAX})")
+    if seq_len * n_haplotypes > UINT32_MAX:
+        raise ValueError(
+            "seq_len * n_haplotypes must fit in uint32 so sparse flat genotype indices remain representable"
+        )
+
+    min_time = finite("min_time")
+    max_time = finite("max_time")
+    if min_time <= 0.0:
+        raise ValueError("min_time must be greater than 0")
+    if max_time <= min_time:
+        raise ValueError("max_time must be greater than min_time")
+
+    for name in ("baseline_mu", "baseline_rec"):
+        value = finite(name)
+        if value <= 0.0:
+            raise ValueError(f"{name} must be greater than 0")
+        if value < FLOAT32_MIN_POSITIVE:
+            raise ValueError(f"{name} is too small to remain positive in float32 storage")
+        if value > MAX_BASELINE_RATE:
+            raise ValueError(
+                f"{name} must not exceed {MAX_BASELINE_RATE:g} per bp per generation "
+                "because synthetic maps can amplify a baseline rate by up to "
+                f"{MAX_SYNTHETIC_RATE_MULTIPLIER:g}x"
+            )
+        if value > FLOAT32_MAX:
+            raise ValueError(f"{name} exceeds the float32 storage limit")
+
+    for name in (
+        "force",
+        "compression",
+        "include_truth",
+        "enable_stdpopsim",
+        "mut_map_scale_to_baseline",
+    ):
+        boolean(name)
+
+    weight_group("source", SOURCE_PROB_FIELDS)
+    enabled_source_total = sum(
+        finite(name)
+        for name in SOURCE_PROB_FIELDS
+        if name != "p_stdpopsim_anchor"
+    )
+    if cfg.enable_stdpopsim:
+        enabled_source_total += finite("p_stdpopsim_anchor")
+    if enabled_source_total <= 0.0:
+        raise ValueError("at least one enabled source probability must be greater than 0")
+    weight_group("demography", DEMOGRAPHY_PROB_FIELDS)
+    empirical_ne_source_mix()
+
+    probability_range("genotype_error_min", "genotype_error_max")
+    probability_range("missing_rate_min", "missing_rate_max")
+    nonnegative_range("phase_switch_rate_per_mb_min", "phase_switch_rate_per_mb_max")
+
+    hotspot_missing_prob = finite("hotspot_missing_prob")
+    if not 0.0 <= hotspot_missing_prob <= 1.0:
+        raise ValueError("hotspot_missing_prob must be between 0 and 1")
+
+    for name in (
+        "observed_map_noise",
+        "empirical_ne_template_log10_shift_sd",
+        "empirical_ne_template_contrast_sd",
+        "empirical_ne_template_time_warp_sd",
+        "empirical_ne_template_bin_noise_sd",
+    ):
+        if finite(name) < 0.0:
+            raise ValueError(f"{name} must be non-negative")
+
+    map_segments_min = positive_integer("map_segments_min")
+    map_segments_max = positive_integer("map_segments_max")
+    if map_segments_min > map_segments_max:
+        raise ValueError("map_segments_min must not exceed map_segments_max")
+
+    max_retries = integer("max_retries")
+    if max_retries < 1:
+        raise ValueError("max_retries must be at least 1")
+
+    workers = integer("workers")
+    if workers != -1 and workers < 1:
+        raise ValueError("workers must be -1 or an integer greater than 0")
+
+    integer("seed")
+    stdpopsim_contig_length = integer("stdpopsim_contig_length")
+    if stdpopsim_contig_length < 0:
+        raise ValueError("stdpopsim_contig_length must be 0 or greater")
+    if stdpopsim_contig_length > UINT32_MAX:
+        raise ValueError(f"stdpopsim_contig_length must not exceed the uint32 position limit ({UINT32_MAX})")
+    if stdpopsim_contig_length and stdpopsim_contig_length * n_haplotypes > UINT32_MAX:
+        raise ValueError(
+            "stdpopsim_contig_length * n_haplotypes must fit in uint32 for sparse flat genotype indices"
+        )
+
+    if cfg.recomb_map_unit not in {"per_bp", "cM_per_Mb"}:
+        raise ValueError("recomb_map_unit must be 'per_bp' or 'cM_per_Mb'")
+    if cfg.mut_map_unit not in {"per_bp", "relative", "roulette_raw"}:
+        raise ValueError("mut_map_unit must be 'per_bp', 'relative', or 'roulette_raw'")

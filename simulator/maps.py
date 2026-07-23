@@ -3,7 +3,7 @@ from __future__ import annotations
 import msprime
 import numpy as np
 
-from .config import Config
+from .config import MAX_MSPRIME_RATE, MAX_SYNTHETIC_RATE_MULTIPLIER, Config
 from .empirical_maps import EmpiricalMapStore, slice_piecewise_map
 from .utils import loguniform
 
@@ -27,7 +27,7 @@ def make_rate_map(pos: np.ndarray, rates: np.ndarray) -> msprime.RateMap:
         raise ValueError("RateMap contains non-finite positions or rates")
     if np.any(np.diff(pos) <= 0):
         raise ValueError("RateMap positions must be strictly increasing")
-    if np.nanmax(rates) > 1e-4:
+    if np.nanmax(rates) > MAX_MSPRIME_RATE:
         raise ValueError("RateMap rates are too large; expected per-bp per-generation probabilities")
     return msprime.RateMap(position=pos, rate=rates)
 
@@ -99,7 +99,11 @@ def synthetic_heterogeneous_map(
         rates[_overlapping_intervals(pos, center, width)] *= rng.uniform(0.01, 0.3)
 
     rates = rates * (baseline / (rates.mean() + 1e-30))
-    rates = np.clip(rates, baseline * 1e-5, baseline * 200)
+    rates = np.clip(
+        rates,
+        baseline * 1e-5,
+        baseline * MAX_SYNTHETIC_RATE_MULTIPLIER,
+    )
 
     obs = rates * rng.lognormal(0, obs_noise_sigma, size=rates.shape)
     if hotspot_missing_prob > 0:
@@ -176,11 +180,26 @@ def sample_maps_for_source(
         })
     elif source == "empirical_map_slice" and empirical.is_available(cfg.seq_len):
         chrom = str(rng.choice(empirical.common_chroms(cfg.seq_len)))
+        start_min, start_max = empirical.common_slice_start_bounds(chrom, cfg.seq_len)
+        shared_start = start_min if start_min == start_max else float(rng.uniform(start_min, start_max))
+        shared_end = shared_start + cfg.seq_len
         rec_pos, rec_rate, obs_rec_pos, obs_rec_rate, rec_meta = slice_piecewise_map(
-            rng, empirical.rec_maps[chrom], cfg.seq_len, obs_noise, cfg.baseline_rec
+            rng,
+            empirical.rec_maps[chrom],
+            cfg.seq_len,
+            obs_noise,
+            cfg.baseline_rec,
+            start=shared_start,
+            validate_input=False,
         )
         mut_pos, mut_rate, obs_mut_pos, obs_mut_rate, mut_meta = slice_piecewise_map(
-            rng, empirical.mut_maps[chrom], cfg.seq_len, obs_noise * 0.6, cfg.baseline_mu
+            rng,
+            empirical.mut_maps[chrom],
+            cfg.seq_len,
+            obs_noise * 0.6,
+            cfg.baseline_mu,
+            start=shared_start,
+            validate_input=False,
         )
         meta.update({
             "map_type": "empirical_slice",
@@ -188,6 +207,10 @@ def sample_maps_for_source(
             "recomb_mode": "empirical_slice",
             "mu_mode": "empirical_slice",
             "observed_noise_sigma": obs_noise,
+            "slice_alignment": "shared_chromosomal_interval",
+            "slice_chrom": chrom,
+            "slice_start_bp": shared_start,
+            "slice_end_bp": shared_end,
             "rec_slice": rec_meta,
             "mut_slice": mut_meta,
         })

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .config import Config
+from .config import MAX_MSPRIME_RATE, Config
 
 
 @dataclass
@@ -27,15 +27,78 @@ class PiecewiseRateMap:
         return float(self.position[-1]) if len(self.position) else 0.0
 
 
+def _validate_piecewise_rate_map(rate_map: PiecewiseRateMap) -> None:
+    position = np.asarray(rate_map.position)
+    rate = np.asarray(rate_map.rate)
+    if position.ndim != 1 or rate.ndim != 1:
+        raise ValueError(f"Empirical map on {rate_map.chrom} must use one-dimensional arrays")
+    if len(position) != len(rate) + 1 or len(rate) == 0:
+        raise ValueError(
+            f"Empirical map on {rate_map.chrom} must have one more position than rate"
+        )
+    if not np.all(np.isfinite(position)) or not np.all(np.isfinite(rate)):
+        raise ValueError(f"Empirical map on {rate_map.chrom} contains non-finite values")
+    if np.any(np.diff(position) <= 0):
+        raise ValueError(f"Empirical map positions on {rate_map.chrom} must be strictly increasing")
+
+
 @dataclass
 class EmpiricalMapStore:
     rec_maps: dict[str, PiecewiseRateMap] = field(default_factory=dict)
     mut_maps: dict[str, PiecewiseRateMap] = field(default_factory=dict)
     metadata: dict[str, dict] = field(default_factory=dict)
+    _common_span_cache: dict[str, tuple[float, float]] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    _usable_chrom_cache: dict[float, tuple[str, ...]] = field(
+        default_factory=dict,
+        repr=False,
+    )
 
     def common_chroms(self, min_len: int) -> list[str]:
+        cache_key = float(min_len)
+        cached = self._usable_chrom_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
         chroms = sorted(set(self.rec_maps) & set(self.mut_maps), key=_chrom_sort_key)
-        return [c for c in chroms if self.rec_maps[c].length >= min_len and self.mut_maps[c].length >= min_len]
+        usable: list[str] = []
+        for chrom in chroms:
+            try:
+                self.common_slice_start_bounds(chrom, min_len)
+            except ValueError:
+                continue
+            usable.append(chrom)
+        self._usable_chrom_cache[cache_key] = tuple(usable)
+        return usable
+
+    def common_slice_start_bounds(self, chrom: str, length: int) -> tuple[float, float]:
+        """Return the inclusive start-coordinate range usable by both maps."""
+        if chrom not in self.rec_maps or chrom not in self.mut_maps:
+            raise ValueError(f"Chromosome {chrom!r} is not present in both empirical maps")
+        if length <= 0:
+            raise ValueError("Slice length must be positive")
+
+        cached_span = self._common_span_cache.get(chrom)
+        if cached_span is None:
+            rec_map = self.rec_maps[chrom]
+            mut_map = self.mut_maps[chrom]
+            _validate_piecewise_rate_map(rec_map)
+            _validate_piecewise_rate_map(mut_map)
+            cached_span = (
+                max(float(rec_map.position[0]), float(mut_map.position[0])),
+                min(float(rec_map.position[-1]), float(mut_map.position[-1])),
+            )
+            self._common_span_cache[chrom] = cached_span
+        common_left, common_right = cached_span
+        latest_start = common_right - float(length)
+        if latest_start < common_left:
+            raise ValueError(
+                f"Chromosome {chrom!r} has only {common_right - common_left:g} bp "
+                f"shared between empirical maps, shorter than requested slice {length:g} bp"
+            )
+        return common_left, latest_start
 
     def is_available(self, min_len: int) -> bool:
         return bool(self.common_chroms(min_len))
@@ -115,7 +178,7 @@ def _scale_rates(
             method = "relative_multiplier_to_baseline"
 
     rates = np.clip(rates, 0.0, None)
-    if len(rates) and np.nanmax(rates) > 1e-4:
+    if len(rates) and np.nanmax(rates) > MAX_MSPRIME_RATE:
         raise ValueError(
             f"{map_kind} map rates look too large for msprime per-bp per-generation rates; "
             "set --recomb-map-unit/--mut-map-unit explicitly so rates can be converted"
@@ -140,6 +203,12 @@ def _piecewise_from_points(
     input_unit: str,
     scale_to_baseline: bool,
 ) -> PiecewiseRateMap:
+    pos = np.asarray(pos)
+    rate_points = np.asarray(rate_points)
+    if pos.ndim != 1 or rate_points.ndim != 1 or len(pos) != len(rate_points):
+        raise ValueError(f"Point map on {chrom} has incompatible position/rate arrays")
+    if not np.all(np.isfinite(pos)) or not np.all(np.isfinite(rate_points)):
+        raise ValueError(f"Point map on {chrom} contains non-finite values")
     order = np.argsort(pos)
     pos = pos[order].astype(np.float64, copy=False)
     rate_points = rate_points[order].astype(np.float64, copy=False)
@@ -182,6 +251,23 @@ def _piecewise_from_intervals(
     input_unit: str,
     scale_to_baseline: bool,
 ) -> PiecewiseRateMap:
+    starts = np.asarray(starts)
+    ends = np.asarray(ends)
+    rates = np.asarray(rates)
+    if (
+        starts.ndim != 1
+        or ends.ndim != 1
+        or rates.ndim != 1
+        or len(starts) != len(ends)
+        or len(starts) != len(rates)
+    ):
+        raise ValueError(f"Interval map on {chrom} has incompatible start/end/rate arrays")
+    if (
+        not np.all(np.isfinite(starts))
+        or not np.all(np.isfinite(ends))
+        or not np.all(np.isfinite(rates))
+    ):
+        raise ValueError(f"Interval map on {chrom} contains non-finite values")
     order = np.argsort(starts)
     starts = starts[order].astype(np.float64, copy=False)
     ends = ends[order].astype(np.float64, copy=False)
@@ -366,31 +452,57 @@ def slice_piecewise_map(
     length: int,
     obs_noise_sigma: float,
     baseline_rate: float,
+    start: float | None = None,
+    *,
+    validate_input: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Slice a rate map, optionally at an explicit source-map coordinate.
+
+    Omitting ``start`` preserves the original random-slice API. Passing it lets
+    callers use the exact same genomic interval for multiple empirical maps.
+    """
+    if validate_input:
+        _validate_piecewise_rate_map(rate_map)
     global_pos = rate_map.position
     global_rate = rate_map.rate
-    max_start = max(1.0, global_pos[-1] - length - 1)
-    start = float(rng.uniform(0, max_start))
-    end = start + length
-    idx_start = max(0, np.searchsorted(global_pos, start, side="right") - 1)
-    idx_end = min(len(global_rate), np.searchsorted(global_pos, end, side="right"))
-    pos = global_pos[idx_start : idx_end + 1].copy()
-    rate = global_rate[idx_start:idx_end].copy()
+    if length <= 0:
+        raise ValueError("Slice length must be positive")
 
-    if len(rate) == 0:
-        pos = np.array([0.0, float(length)], dtype=np.float64)
-        rate = np.array([baseline_rate], dtype=np.float64)
+    min_start = float(global_pos[0])
+    max_start = float(global_pos[-1]) - float(length)
+    if max_start < min_start:
+        raise ValueError(
+            f"Empirical map on {rate_map.chrom} spans only "
+            f"{float(global_pos[-1]) - min_start:g} bp, shorter than requested slice {length:g} bp"
+        )
+    if start is None:
+        start = min_start if max_start == min_start else float(rng.uniform(min_start, max_start))
     else:
-        pos = pos - start
-        pos[0] = 0.0
-        if pos[-1] < length:
-            pos = np.append(pos, float(length))
-            rate = np.append(rate, rate[-1])
-        else:
-            pos[-1] = float(length)
-        if len(pos) != len(rate) + 1:
-            pos = pos[: len(rate) + 1]
-            pos[-1] = float(length)
+        start = float(start)
+        if not np.isfinite(start):
+            raise ValueError("Slice start must be finite")
+        if start < min_start or start > max_start:
+            raise ValueError(
+                f"Slice start {start:g} is outside the valid range "
+                f"[{min_start:g}, {max_start:g}] for {rate_map.chrom}"
+            )
+
+    end = start + length
+
+    internal_boundaries = global_pos[(global_pos > start) & (global_pos < end)]
+    absolute_interval_starts = np.concatenate(
+        [np.array([start], dtype=np.float64), internal_boundaries.astype(np.float64, copy=False)]
+    )
+    rate_indices = np.searchsorted(global_pos, absolute_interval_starts, side="right") - 1
+    rate_indices = np.clip(rate_indices, 0, len(global_rate) - 1)
+    rate = global_rate[rate_indices].copy()
+    pos = np.concatenate(
+        [
+            np.array([0.0], dtype=np.float64),
+            internal_boundaries.astype(np.float64, copy=False) - start,
+            np.array([float(length)], dtype=np.float64),
+        ]
+    )
 
     true_rate = np.clip(rate, baseline_rate * 1e-4, baseline_rate * 500)
     obs_rate = true_rate * rng.lognormal(0.0, obs_noise_sigma, size=true_rate.shape)

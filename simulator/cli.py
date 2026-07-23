@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import sys
 from pathlib import Path
 
 from .config import Config, apply_preset, validate_config
 from .dataset_files import write_dataset_files
+from .dataset_state import DatasetConfigMismatchError
 from .empirical_maps import load_empirical_maps
-from .shards import generate_dataset
+from .shards import (
+    DatasetGenerationLockedError,
+    DatasetSourceUnavailableError,
+    UnsafeOutputDirectoryError,
+    dataset_output_lock,
+    generate_dataset,
+    reuse_completed_dataset_if_compatible,
+)
 
 
 def parse_args() -> Config:
@@ -46,7 +55,10 @@ def parse_args() -> Config:
 
     ns = parser.parse_args()
     preset = ns.preset if ns.preset is not None else "mini"
-    cfg = apply_preset(Config(preset=preset))
+    try:
+        cfg = apply_preset(Config(preset=preset))
+    except ValueError as exc:
+        parser.error(str(exc))
     for f in dataclasses.fields(Config):
         val = getattr(ns, f.name, None)
         if val is not None:
@@ -63,19 +75,35 @@ def parse_args() -> Config:
 
 def main() -> None:
     cfg = parse_args()
-    Path(cfg.out_dir).mkdir(parents=True, exist_ok=True)
     print("=" * 80)
     print(f"DLCoalSim generator: {cfg.dataset_name}")
     print(f"out_dir={cfg.out_dir}")
     print(f"preset={cfg.preset} seq_len={cfg.seq_len:,} H={cfg.n_haplotypes} T={cfg.time_bins}")
     print("=" * 80)
+    sys.stdout.flush()
 
-    empirical = load_empirical_maps(cfg)
-    if (cfg.recomb_map or cfg.mut_map) and not empirical.is_available(cfg.seq_len):
-        print("[warn] empirical maps unavailable, incomplete, or shorter than seq_len; empirical source will be disabled")
-
-    sample_manifest = generate_dataset(cfg, empirical)
-    write_dataset_files(cfg, sample_manifest)
+    try:
+        with dataset_output_lock(cfg.out_dir):
+            sample_manifest = reuse_completed_dataset_if_compatible(
+                cfg,
+                _lock_already_held=True,
+            )
+            if sample_manifest is None:
+                try:
+                    empirical = load_empirical_maps(cfg)
+                except (OSError, ValueError) as exc:
+                    raise SystemExit(f"[error] failed to load empirical maps: {exc}") from None
+                sample_manifest = generate_dataset(cfg, empirical, _lock_already_held=True)
+            write_dataset_files(cfg, sample_manifest)
+    except (
+        DatasetConfigMismatchError,
+        DatasetGenerationLockedError,
+        DatasetSourceUnavailableError,
+        UnsafeOutputDirectoryError,
+    ) as exc:
+        raise SystemExit(f"[error] {exc}") from None
+    except OSError as exc:
+        raise SystemExit(f"[error] filesystem operation failed: {exc}") from None
     print("[done] dataset written to", cfg.out_dir)
     print("       manifest:", Path(cfg.out_dir) / "manifest.json")
     print("       loader:  ", Path(cfg.out_dir) / "scripts" / "loader.py")

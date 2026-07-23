@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import atexit
+
 import msprime
 import numpy as np
 
@@ -8,19 +10,45 @@ from .demography import sample_custom_demography
 from .empirical_maps import EmpiricalMapStore
 from .maps import choose_source, constant_map, make_rate_map, sample_maps_for_source
 from .noise import apply_genotype_noise, pack_haplotypes
-from .stdpopsim_support import try_stdpopsim_sample
+from .stdpopsim_support import StdpopsimSimulationError, try_stdpopsim_sample
 from .utils import rng_from_seed
 
 
 _WORKER_CFG: Config | None = None
 _WORKER_EMPIRICAL: EmpiricalMapStore | None = None
+_WORKER_SHARED_MAP_HANDLES: list | None = None
 
 
-def init_worker(cfg_dict: dict) -> None:
-    global _WORKER_CFG, _WORKER_EMPIRICAL
+def _close_worker_shared_maps() -> None:
+    global _WORKER_EMPIRICAL, _WORKER_SHARED_MAP_HANDLES
+    _WORKER_EMPIRICAL = None
+    if _WORKER_SHARED_MAP_HANDLES:
+        from .shared_maps import release_shared_memory
+
+        release_shared_memory(_WORKER_SHARED_MAP_HANDLES)
+    _WORKER_SHARED_MAP_HANDLES = None
+
+
+atexit.register(_close_worker_shared_maps)
+
+
+def init_worker(
+    cfg_dict: dict,
+    empirical: EmpiricalMapStore | None = None,
+    empirical_shared_spec=None,
+) -> None:
+    global _WORKER_CFG, _WORKER_EMPIRICAL, _WORKER_SHARED_MAP_HANDLES
+    if empirical is not None and empirical_shared_spec is not None:
+        raise ValueError("provide either empirical or empirical_shared_spec, not both")
+    _close_worker_shared_maps()
     _WORKER_CFG = Config(**cfg_dict)
     validate_config(_WORKER_CFG)
-    _WORKER_EMPIRICAL = None
+    if empirical_shared_spec is not None:
+        from .shared_maps import attach_shared_empirical_map_store
+
+        _WORKER_EMPIRICAL, _WORKER_SHARED_MAP_HANDLES = attach_shared_empirical_map_store(empirical_shared_spec)
+    else:
+        _WORKER_EMPIRICAL = empirical
 
 
 def _get_worker_cfg(cfg_dict: dict | None = None) -> Config:
@@ -31,7 +59,6 @@ def _get_worker_cfg(cfg_dict: dict | None = None) -> Config:
         return cfg
     if _WORKER_CFG is None:
         raise RuntimeError("simulator worker was not initialized")
-    validate_config(_WORKER_CFG)
     return _WORKER_CFG
 
 
@@ -241,6 +268,8 @@ def simulate_one_with_retries(task: tuple) -> dict:
     for attempt in range(cfg.max_retries):
         try:
             return simulate_one(current)
+        except StdpopsimSimulationError:
+            raise
         except Exception as exc:
             last_error = exc
             seed = int(current[1] if len(current) == 2 else current[3])

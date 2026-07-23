@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from .config import Config, DEMO_IDS, SOURCE_IDS
+from .config import Config, DEMO_IDS, SOURCE_IDS, validate_config
 from .utils import time_grid
 
 
@@ -649,15 +649,28 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
 
 
 def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
+    validate_config(cfg)
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    manifest_path = out / "manifest.json"
+    manifest_path.unlink(missing_ok=True)
+    manifest_path.with_name(f"{manifest_path.name}.tmp").unlink(missing_ok=True)
+
+    def write_atomic(path: Path, text: str) -> None:
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        tmp_path.write_text(text, encoding="utf-8")
+        tmp_path.replace(path)
+
     edges, mids = time_grid(cfg)
     config_dict = dataclasses.asdict(cfg)
     config_dict["time_edges"] = edges.tolist()
     config_dict["time_mids"] = mids.tolist()
     config_dict["source_ids"] = SOURCE_IDS
     config_dict["demography_ids"] = DEMO_IDS
-    (out / "config.json").write_text(json.dumps(config_dict, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_atomic(
+        out / "config.json",
+        json.dumps(config_dict, indent=2, ensure_ascii=False),
+    )
 
     manifest = {
         "dataset_name": cfg.dataset_name,
@@ -668,7 +681,6 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
         "source_ids": SOURCE_IDS,
         "demography_ids": DEMO_IDS,
     }
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     (out / "README.md").write_text(README_TEMPLATE.format(dataset_name=cfg.dataset_name), encoding="utf-8")
 
     scripts = out / "scripts"
@@ -683,3 +695,10 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
     notebooks.mkdir(exist_ok=True)
     for name, notebook in tutorial_notebooks().items():
         (notebooks / name).write_text(json.dumps(notebook, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # The root manifest is the final publication marker for all dataset support
+    # files; publish it atomically only after every other artifact succeeds.
+    write_atomic(
+        manifest_path,
+        json.dumps(manifest, indent=2, ensure_ascii=False),
+    )

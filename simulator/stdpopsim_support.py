@@ -8,6 +8,33 @@ from .config import Config
 from .utils import bin_average_log10_ne, time_grid
 
 
+class StdpopsimSimulationError(RuntimeError):
+    """Raised when a requested stdpopsim anchor cannot be generated."""
+
+
+def validate_stdpopsim_setup(cfg: Config) -> None:
+    """Fail before generation if an explicitly enabled anchor setup is unusable."""
+
+    if not cfg.enable_stdpopsim or cfg.p_stdpopsim_anchor <= 0.0:
+        return
+    try:
+        import stdpopsim  # type: ignore
+
+        species = stdpopsim.get_species(cfg.stdpopsim_species)
+        model_ids = [model.strip() for model in cfg.stdpopsim_models.split(",") if model.strip()]
+        if model_ids:
+            for model_id in model_ids:
+                species.get_demographic_model(model_id)
+        elif not getattr(species, "demographic_models", None):
+            raise ValueError(f"species {cfg.stdpopsim_species!r} has no demographic models")
+        stdpopsim.get_engine("msprime")
+    except Exception as exc:
+        raise StdpopsimSimulationError(
+            "stdpopsim anchors are enabled but the dependency, species, models, "
+            f"or engine are unavailable: {exc}"
+        ) from exc
+
+
 def try_stdpopsim_sample(
     rng: np.random.Generator,
     cfg: Config,
@@ -16,10 +43,6 @@ def try_stdpopsim_sample(
         return None
     try:
         import stdpopsim  # type: ignore
-    except Exception:
-        return None
-
-    try:
         species = stdpopsim.get_species(cfg.stdpopsim_species)
         model_ids = [m.strip() for m in cfg.stdpopsim_models.split(",") if m.strip()]
         if not model_ids:
@@ -80,5 +103,5 @@ def try_stdpopsim_sample(
             "demography_values": [float(x) for x in values],
         }
         return ts, y, meta, contig
-    except Exception:
-        return None
+    except Exception as exc:
+        raise StdpopsimSimulationError(f"failed to generate a stdpopsim anchor: {exc}") from exc

@@ -672,4 +672,4 @@ def test_demography_semantic_version_was_bumped() -> None:
     assert cfg.p_canonical_smcpp_sawtooth == 0.0
     assert cfg.p_zigzag_strong == pytest.approx(0.01)
     assert cfg.p_zigzag == pytest.approx(0.005)
-    assert SAMPLE_GENERATOR_SCHEMA_VERSION == 3
+    assert SAMPLE_GENERATOR_SCHEMA_VERSION == 4

@@ -176,6 +176,8 @@ def try_stdpopsim_sample(
             "stdpopsim_contig_length": int(contig_length),
             "target_scale": "log10_Ne",
             "target_aggregation": "log_time_bin_average",
+            "target_time_bins": int(cfg.time_bins),
+            "demography_generation_bins": int(cfg.demography_generation_bins),
             "demography_breaks": [float(x) for x in breaks],
             "demography_values": [float(x) for x in values],
             "demography_growth_rates": [float(x) for x in growth_rates],

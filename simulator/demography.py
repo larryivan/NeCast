@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from typing import Sequence
 
@@ -16,7 +17,13 @@ from .config import (
     Config,
 )
 from .ne_templates import empirical_ne_templates_available, load_empirical_ne_templates
-from .utils import bin_average_log10_ne, loguniform, piecewise_eval, time_grid
+from .utils import (
+    bin_average_log10_ne,
+    demography_generation_grid,
+    loguniform,
+    piecewise_eval,
+    time_grid,
+)
 
 
 SamplerResult = tuple[list[float], list[float], dict]
@@ -1397,24 +1404,38 @@ def choose_demo_type(rng: np.random.Generator, cfg: Config) -> str:
 
 
 def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msprime.Demography, np.ndarray, dict]:
-    edges, mids = time_grid(cfg)
-    generator_recipe = choose_generator_recipe(rng, cfg)
+    target_edges, _ = time_grid(cfg)
+    generation_edges, generation_mids = demography_generation_grid(cfg)
+    # Existing samplers use ``cfg.time_bins`` for their internal array lengths.
+    # Give them a view whose time_bins matches the fixed generation grid so the
+    # v3 latent histories and RNG stream remain bit-for-bit unchanged while the
+    # supervised target moves from 48/32 to 64 bins.
+    sampler_cfg = dataclasses.replace(
+        cfg,
+        time_bins=cfg.demography_generation_bins,
+    )
+    generator_recipe = choose_generator_recipe(rng, sampler_cfg)
     sampler = DEMO_SAMPLERS.get(generator_recipe)
     if sampler is None:
         raise ValueError(f"Unknown demography sampler: {generator_recipe}")
 
-    breaks, values, meta = sampler(rng, cfg, edges, mids)
+    breaks, values, meta = sampler(
+        rng,
+        sampler_cfg,
+        generation_edges,
+        generation_mids,
+    )
     breaks, values, growth_rates = _clean_demography(
         breaks,
         values,
         meta.get("demography_growth_rates"),
     )
-    y = bin_average_log10_ne(edges, breaks, values, growth_rates)
+    y = bin_average_log10_ne(target_edges, breaks, values, growth_rates)
     demography_type = resolve_demography_type(generator_recipe, values, meta)
     meta = {
         **meta,
         **summarize_demography(
-            edges,
+            generation_edges,
             breaks,
             values,
             growth_rates,
@@ -1434,5 +1455,7 @@ def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msp
         "demography_growth_rates": [float(x) for x in growth_rates],
         "target_scale": "log10_Ne",
         "target_aggregation": "log_time_bin_average",
+        "target_time_bins": int(cfg.time_bins),
+        "demography_generation_bins": int(cfg.demography_generation_bins),
     }
     return build_demography(breaks, values, growth_rates), y, meta

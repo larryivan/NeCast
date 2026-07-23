@@ -46,6 +46,8 @@ class DatasetStateTests(unittest.TestCase):
             "n_samples": self.cfg.n_samples + 1,
             "shard_size": self.cfg.shard_size + 1,
             "seq_len": self.cfg.seq_len + 1,
+            "time_bins": self.cfg.time_bins + 1,
+            "demography_generation_bins": self.cfg.demography_generation_bins + 1,
             "compression": not self.cfg.compression,
             "compression_level": self.cfg.compression_level + 1,
             "include_truth": not self.cfg.include_truth,

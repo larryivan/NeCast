@@ -78,7 +78,10 @@ def main() -> None:
     print("=" * 80)
     print(f"DLCoalSim generator: {cfg.dataset_name}")
     print(f"out_dir={cfg.out_dir}")
-    print(f"preset={cfg.preset} seq_len={cfg.seq_len:,} H={cfg.n_haplotypes} T={cfg.time_bins}")
+    print(
+        f"preset={cfg.preset} seq_len={cfg.seq_len:,} H={cfg.n_haplotypes} "
+        f"target_T={cfg.time_bins} history_T={cfg.demography_generation_bins}"
+    )
     print("=" * 80)
     sys.stdout.flush()
 

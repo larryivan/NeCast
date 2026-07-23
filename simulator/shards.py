@@ -711,6 +711,8 @@ def _metadata_row(meta: dict) -> dict:
         "literature_model_id": meta.get("literature_model_id", ""),
         "growth_rate_per_generation": meta.get("growth_rate_per_generation", 0.0),
         "target_quality": meta.get("target_quality", "strict_single_population"),
+        "target_time_bins": meta.get("target_time_bins", 0),
+        "demography_generation_bins": meta.get("demography_generation_bins", 0),
         "empirical_ne_template": meta.get("empirical_ne_template", False),
         "template_source_key": meta.get("template_source_key", ""),
         "template_method": meta.get("template_method", ""),
@@ -952,7 +954,7 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                 }
                 for id_key, allowed in valid_ids.items():
                     if not set(np.asarray(data[id_key], dtype=np.int64)).issubset(allowed):
-                        raise ValueError(f"{id_key} contains an unknown schema-v3 ID")
+                        raise ValueError(f"{id_key} contains an unknown current-schema ID")
                     stored_ids_for_metadata[id_key] = np.asarray(
                         data[id_key],
                         dtype=np.int64,
@@ -978,6 +980,10 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                 if target.shape != (count, cfg.time_bins):
                     raise ValueError(
                         f"target shape is {target.shape}, expected {(count, cfg.time_bins)}"
+                    )
+                if target.dtype != np.float32:
+                    raise ValueError(
+                        f"target dtype is {target.dtype}, expected float32"
                     )
                 stored_h = np.asarray(data["n_haplotypes"]).reshape(-1)
                 if stored_h.size != 1 or int(stored_h[0]) != cfg.n_haplotypes:
@@ -1014,6 +1020,15 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                     != SAMPLE_GENERATOR_SCHEMA_VERSION
                 ):
                     raise ValueError("metadata generator schema version mismatch")
+                if int(row.get("target_time_bins", -1)) != cfg.time_bins:
+                    raise ValueError("metadata target bin count mismatch")
+                if (
+                    int(row.get("demography_generation_bins", -1))
+                    != cfg.demography_generation_bins
+                ):
+                    raise ValueError(
+                        "metadata demography generation bin count mismatch"
+                    )
                 for id_key in (
                     "source_id",
                     "demography_id",

@@ -20,7 +20,24 @@ def rng_from_seed(seed: int) -> np.random.Generator:
 
 
 def time_grid(cfg: Config) -> tuple[np.ndarray, np.ndarray]:
-    edges = np.geomspace(cfg.min_time, cfg.max_time, cfg.time_bins + 1).astype(np.float64)
+    return log_time_grid(cfg.min_time, cfg.max_time, cfg.time_bins)
+
+
+def demography_generation_grid(cfg: Config) -> tuple[np.ndarray, np.ndarray]:
+    """Return the latent-history grid, independent of target resolution."""
+    return log_time_grid(
+        cfg.min_time,
+        cfg.max_time,
+        cfg.demography_generation_bins,
+    )
+
+
+def log_time_grid(
+    min_time: float,
+    max_time: float,
+    n_bins: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    edges = np.geomspace(min_time, max_time, n_bins + 1).astype(np.float64)
     mids = np.sqrt(edges[:-1] * edges[1:]).astype(np.float64)
     return edges, mids
 

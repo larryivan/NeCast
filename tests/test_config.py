@@ -26,6 +26,24 @@ def test_builtin_presets_are_valid(preset: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("preset", "generation_bins"),
+    [
+        ("mini", 32),
+        ("core_v01", 48),
+        ("full_v01", 48),
+    ],
+)
+def test_builtin_presets_use_64_targets_without_changing_history_prior(
+    preset: str,
+    generation_bins: int,
+) -> None:
+    cfg = apply_preset(Config(preset=preset))
+
+    assert cfg.time_bins == 64
+    assert cfg.demography_generation_bins == generation_bins
+
+
+@pytest.mark.parametrize(
     ("changes", "message"),
     [
         ({"n_samples": 0}, "n_samples"),
@@ -34,6 +52,7 @@ def test_builtin_presets_are_valid(preset: str) -> None:
         ({"compute_chunk_size": 0}, "compute_chunk_size"),
         ({"seq_len": 0}, "seq_len"),
         ({"time_bins": 0}, "time_bins"),
+        ({"demography_generation_bins": 0}, "demography_generation_bins"),
         ({"n_haplotypes": 1}, "at least 2"),
         ({"n_haplotypes": 3}, "even"),
         ({"n_haplotypes": INT16_MAX + 1}, "int16"),

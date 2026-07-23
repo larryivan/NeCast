@@ -102,7 +102,49 @@ def check_monotone_by_offsets(name: str, values: np.ndarray, offsets: np.ndarray
             raise ValueError(f"{name}: positions are not monotone in local sample {i}")
 
 
-def check_shard(path: Path) -> list[str]:
+def validate_time_grid(
+    payload: dict,
+    *,
+    bins_key: str,
+    edges_key: str,
+    mids_key: str,
+    label: str,
+) -> tuple[int, np.ndarray, np.ndarray] | None:
+    bins = payload.get(bins_key)
+    edges = payload.get(edges_key)
+    mids = payload.get(mids_key)
+    if bins is None and edges is None and mids is None:
+        return None
+    if bins is None or edges is None or mids is None:
+        raise ValueError(f"{label} grid metadata is incomplete")
+    bins = int(bins)
+    edges_arr = np.asarray(edges, dtype=np.float64)
+    mids_arr = np.asarray(mids, dtype=np.float64)
+    if bins <= 0 or edges_arr.shape != (bins + 1,) or mids_arr.shape != (bins,):
+        raise ValueError(f"{label} grid dimensions are invalid")
+    if (
+        not np.isfinite(edges_arr).all()
+        or not np.isfinite(mids_arr).all()
+        or np.any(edges_arr <= 0.0)
+        or np.any(mids_arr <= 0.0)
+        or np.any(np.diff(edges_arr) <= 0.0)
+    ):
+        raise ValueError(f"{label} grid values are invalid")
+    np.testing.assert_allclose(
+        mids_arr,
+        np.sqrt(edges_arr[:-1] * edges_arr[1:]),
+        rtol=2e-15,
+        atol=0.0,
+        err_msg=f"{label} midpoints do not match its edges",
+    )
+    return bins, edges_arr, mids_arr
+
+
+def check_shard(
+    path: Path,
+    target_bins: int | None = None,
+    demography_generation_bins: int | None = None,
+) -> list[str]:
     with np.load(path, allow_pickle=False) as data:
         missing_keys = REQUIRED_NPZ_KEYS.difference(data.files)
         if missing_keys:
@@ -133,7 +175,7 @@ def check_shard(path: Path) -> list[str]:
         }
         for key, allowed in allowed_ids.items():
             if not set(stored_ids[key]).issubset(allowed):
-                raise ValueError(f"{path.name}: {key} contains an unknown schema-v3 ID")
+                raise ValueError(f"{path.name}: {key} contains an unknown current-schema ID")
         if stored_ids["demography_id"] != stored_ids["generator_recipe_id"]:
             raise ValueError(
                 f"{path.name}: legacy demography_id differs from generator_recipe_id"
@@ -177,7 +219,22 @@ def check_shard(path: Path) -> list[str]:
                 if (pb - pa) not in {rb - ra, rb - ra + 1}:
                     raise ValueError(f"{path.name}: {prefix} pos/rate length mismatch in local sample {i}")
 
-        if data["target_log10_ne"].shape[0] != n or not np.isfinite(data["target_log10_ne"]).all():
+        target = np.asarray(data["target_log10_ne"])
+        expected_target_shape = (
+            (n, target_bins)
+            if target_bins is not None
+            else None
+        )
+        if (
+            target.ndim != 2
+            or target.shape[0] != n
+            or target.dtype != np.float32
+            or (
+                expected_target_shape is not None
+                and target.shape != expected_target_shape
+            )
+            or not np.isfinite(target).all()
+        ):
             raise ValueError(f"{path.name}: invalid target_log10_ne")
         if np.any(data["sequence_length"] <= 0):
             raise ValueError(f"{path.name}: non-positive sequence_length")
@@ -195,6 +252,19 @@ def check_shard(path: Path) -> list[str]:
             != SAMPLE_GENERATOR_SCHEMA_VERSION
         ):
             raise ValueError(f"{shard_meta.name}: generator schema version mismatch")
+        if (
+            target_bins is not None
+            and int(row.get("target_time_bins", -1)) != target_bins
+        ):
+            raise ValueError(f"{shard_meta.name}: target bin count mismatch")
+        if (
+            demography_generation_bins is not None
+            and int(row.get("demography_generation_bins", -1))
+            != demography_generation_bins
+        ):
+            raise ValueError(
+                f"{shard_meta.name}: demography generation bin count mismatch"
+            )
         for key in sample_id_keys:
             if int(row.get(key, -1)) != stored_ids[key][index]:
                 raise ValueError(f"{shard_meta.name}: {key} differs from npz")
@@ -221,13 +291,21 @@ def shard_ids_from_any(path: Path) -> list[str]:
     return []
 
 
-def scan_shards(shards: list[Path]) -> tuple[list[Path], list[str], list[tuple[Path, list[str], str]]]:
+def scan_shards(
+    shards: list[Path],
+    target_bins: int | None = None,
+    demography_generation_bins: int | None = None,
+) -> tuple[list[Path], list[str], list[tuple[Path, list[str], str]]]:
     good_shards: list[Path] = []
     good_ids: list[str] = []
     bad: list[tuple[Path, list[str], str]] = []
     for shard in tqdm(shards, desc="check shards", unit="shard"):
         try:
-            ids = check_shard(shard)
+            ids = check_shard(
+                shard,
+                target_bins=target_bins,
+                demography_generation_bins=demography_generation_bins,
+            )
         except Exception as exc:
             bad.append((shard, shard_ids_from_any(shard), str(exc)))
         else:
@@ -328,11 +406,87 @@ def drop_bad_shards(data_dir: Path, good_shards: list[Path], good_ids: list[str]
 
 def check_dataset(args: argparse.Namespace) -> int:
     data_dir = Path(args.data_dir).resolve()
+    manifest_path = data_dir / "manifest.json"
+    config_path = data_dir / "config.json"
+    manifest_obj = read_json(manifest_path) if manifest_path.exists() else {}
+    config_obj = read_json(config_path) if config_path.exists() else {}
+    manifest_schema = manifest_obj.get("generator_schema_version")
+    config_schema = config_obj.get("generator_schema_version")
+    if manifest_schema not in {None, SAMPLE_GENERATOR_SCHEMA_VERSION}:
+        raise ValueError(
+            f"manifest generator schema is {manifest_schema}, "
+            f"expected {SAMPLE_GENERATOR_SCHEMA_VERSION}"
+        )
+    if config_schema not in {None, SAMPLE_GENERATOR_SCHEMA_VERSION}:
+        raise ValueError(
+            f"config generator schema is {config_schema}, "
+            f"expected {SAMPLE_GENERATOR_SCHEMA_VERSION}"
+        )
+    config_target_grid = validate_time_grid(
+        config_obj,
+        bins_key="time_bins",
+        edges_key="time_edges",
+        mids_key="time_mids",
+        label="config target",
+    )
+    manifest_target_grid = validate_time_grid(
+        manifest_obj,
+        bins_key="time_bins",
+        edges_key="time_edges",
+        mids_key="time_mids",
+        label="manifest target",
+    )
+    config_generation_grid = validate_time_grid(
+        config_obj,
+        bins_key="demography_generation_bins",
+        edges_key="demography_generation_time_edges",
+        mids_key="demography_generation_time_mids",
+        label="config demography generation",
+    )
+    manifest_generation_grid = validate_time_grid(
+        manifest_obj,
+        bins_key="demography_generation_bins",
+        edges_key="demography_generation_time_edges",
+        mids_key="demography_generation_time_mids",
+        label="manifest demography generation",
+    )
+    if (
+        config_target_grid is not None
+        and manifest_target_grid is not None
+        and not np.array_equal(config_target_grid[1], manifest_target_grid[1])
+    ):
+        raise ValueError("config and manifest target grids differ")
+    if (
+        config_generation_grid is not None
+        and manifest_generation_grid is not None
+        and not np.array_equal(config_generation_grid[1], manifest_generation_grid[1])
+    ):
+        raise ValueError("config and manifest demography generation grids differ")
+    target_grid = manifest_target_grid or config_target_grid
+    generation_grid = manifest_generation_grid or config_generation_grid
+    target_bins = target_grid[0] if target_grid is not None else None
+    demography_generation_bins = (
+        generation_grid[0] if generation_grid is not None else None
+    )
+    if (
+        target_grid is not None
+        and generation_grid is not None
+        and (
+            target_grid[1][0] != generation_grid[1][0]
+            or target_grid[1][-1] != generation_grid[1][-1]
+        )
+    ):
+        raise ValueError("target and demography generation grid endpoints differ")
+
     shards = shard_paths(data_dir)
     if not shards:
         raise SystemExit(f"no shard_*.npz found in {data_dir / 'samples'}")
 
-    good_shards, shard_ids, bad = scan_shards(shards)
+    good_shards, shard_ids, bad = scan_shards(
+        shards,
+        target_bins=target_bins,
+        demography_generation_bins=demography_generation_bins,
+    )
     bad_ids = [sample_id for _, ids, _ in bad for sample_id in ids]
 
     print(f"checked {len(shards)} shards")
@@ -372,9 +526,8 @@ def check_dataset(args: argparse.Namespace) -> int:
         if len(jsonl_ids) != len(shard_ids) or set(jsonl_ids) != set(shard_ids):
             raise ValueError("metadata/samples.jsonl.gz sample_id set differs from shards")
 
-    manifest = data_dir / "manifest.json"
-    if manifest.exists():
-        expected = int(read_json(manifest).get("samples", {}).get("n_samples", len(shard_ids)))
+    if manifest_path.exists():
+        expected = int(manifest_obj.get("samples", {}).get("n_samples", len(shard_ids)))
         if expected != len(shard_ids):
             raise ValueError(f"manifest n_samples={expected}, actual={len(shard_ids)}")
 

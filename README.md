@@ -57,11 +57,25 @@ dlcoalsim \
 
 The built-in presets are:
 
-| Preset | Samples | Sequence length | Haplotypes | Workers |
-| --- | ---: | ---: | ---: | ---: |
-| `mini` | 512 | 1 Mb | 24 | 1 |
-| `core_v01` | 20,000 | 10 Mb | 64 | all CPUs minus one |
-| `full_v01` | 100,000 | 20 Mb | 64 | all CPUs minus one |
+| Preset | Samples | Sequence length | Haplotypes | Target bins | History-generation bins | Workers |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `mini` | 512 | 1 Mb | 24 | 64 | 32 | 1 |
+| `core_v01` | 20,000 | 10 Mb | 64 | 64 | 48 | all CPUs minus one |
+| `full_v01` | 100,000 | 20 Mb | 64 | 64 | 48 | all CPUs minus one |
+
+All built-in presets use a 64-bin supervised target. `time_bins` controls only
+that target grid. The separate `demography_generation_bins` setting preserves
+the population-history prior that each preset used before the 64-bin upgrade
+(32 for `mini`, 48 for `core_v01` and `full_v01`). Consequently, changing
+target resolution does not change the same-seed latent history, simulated
+genotypes, maps, or observation noise. `config.json` and `manifest.json` record
+the edges and midpoints of both grids.
+
+For a custom schema-v3 command, the old `time_bins` value controlled both the
+target and the population-history sampler. To reproduce that old latent prior
+under schema v4, pass the old value explicitly as
+`--demography-generation-bins`; choose the new target resolution separately
+with `--time-bins` (64 for the current training format).
 
 Use a new output directory for every distinct configuration. A completed
 directory records a SHA-256 fingerprint of every sample-generation setting and
@@ -123,11 +137,12 @@ population-history classes. `event_severity` is consistently defined as
 `min_Ne / max_Ne`; the former recipe-specific value remains available as
 `recipe_event_severity`.
 
-This is generator schema v3. Existing v2 outputs lack the new
-`demography_type_id` and `generator_recipe_id` arrays and must be regenerated
-in a new directory or with an intentional `--force`. Every v3 shard also stores
-its schema version; numeric IDs should always be decoded with that dataset's
-own manifest.
+This is generator schema v4. It upgrades every built-in target to 64 bins and
+separates target resolution from latent-history generation. Existing v3
+outputs keep their original 32- or 48-bin targets and must be regenerated in a
+new directory or with an intentional `--force` to use the v4 format. Every
+shard stores its schema version; numeric IDs should always be decoded with that
+dataset's own manifest.
 
 `canonical_zigzag_1s14` and `canonical_smcpp_sawtooth` preserve the two
 slightly different published validation models as fixed anchors. Their default

@@ -14,7 +14,7 @@ from .config import (
     validate_config,
 )
 from .dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
-from .utils import time_grid
+from .utils import demography_generation_grid, time_grid
 
 
 README_TEMPLATE = """# {dataset_name}
@@ -56,6 +56,13 @@ with the mappings in `config.json` or `manifest.json`.
 
 Targets are log-time bin averages, not midpoint samples. This keeps short
 events such as recent bottlenecks visible in labels when they overlap a time bin.
+Every built-in preset writes 64 target bins. The target grid is deliberately
+separate from the latent population-history generation grid, so changing target
+resolution does not change the sampled history, genotype data, maps, or noise
+for a fixed seed. Both grids are recorded in `config.json` and `manifest.json`.
+When migrating a custom schema-v3 command, pass its old `time_bins` value as
+`--demography-generation-bins` to reproduce the old latent prior, then choose
+the v4 target resolution separately with `--time-bins`.
 Main simulator samples are generated as diploid individuals (`ploidy=2`), so
 `n_haplotypes` must be even. Phase switch noise swaps the two haplotypes within
 each diploid individual after sampled switch points; this is recorded as
@@ -185,7 +192,7 @@ class DLCoalSimShard:
         self.shard_path = Path(shard_path)
         self.data = np.load(self.shard_path, allow_pickle=False)
         self.generator_schema_version = int(self.data["generator_schema_version"][0])
-        if self.generator_schema_version != 3:
+        if self.generator_schema_version != 4:
             raise ValueError(
                 f"unsupported generator schema: {self.generator_schema_version}"
             )
@@ -505,9 +512,46 @@ def validate_dataset(data_dir):
     demography_type_ids = manifest.get("demography_type_ids")
     generator_recipe_ids = manifest.get("generator_recipe_ids")
     generator_schema_version = manifest.get("generator_schema_version")
+    time_edges = manifest.get("time_edges")
+    time_mids = manifest.get("time_mids")
+    demography_generation_bins = manifest.get("demography_generation_bins")
+    demography_generation_time_edges = manifest.get(
+        "demography_generation_time_edges"
+    )
+    demography_generation_time_mids = manifest.get(
+        "demography_generation_time_mids"
+    )
     assert isinstance(demography_type_ids, dict), "manifest has no demography type ID map"
     assert isinstance(generator_recipe_ids, dict), "manifest has no generator recipe ID map"
-    assert generator_schema_version == 3, "unsupported generator schema"
+    assert generator_schema_version == 4, "unsupported generator schema"
+    assert isinstance(time_mids, list) and time_mids, "manifest has no target time grid"
+    assert (
+        isinstance(demography_generation_bins, int)
+        and demography_generation_bins > 0
+    ), "manifest has no demography generation bin count"
+    target_bins = len(time_mids)
+    assert isinstance(time_edges, list) and len(time_edges) == target_bins + 1, (
+        "invalid target time edges"
+    )
+    assert (
+        isinstance(demography_generation_time_edges, list)
+        and len(demography_generation_time_edges)
+        == demography_generation_bins + 1
+    ), "invalid demography generation time edges"
+    assert (
+        isinstance(demography_generation_time_mids, list)
+        and len(demography_generation_time_mids) == demography_generation_bins
+    ), "invalid demography generation time midpoints"
+    target_edges = np.asarray(time_edges, dtype=float)
+    generation_edges = np.asarray(demography_generation_time_edges, dtype=float)
+    assert np.isfinite(target_edges).all() and np.all(np.diff(target_edges) > 0), (
+        "target time edges are invalid"
+    )
+    assert np.isfinite(generation_edges).all() and np.all(np.diff(generation_edges) > 0), (
+        "demography generation time edges are invalid"
+    )
+    assert target_edges[0] == generation_edges[0], "time-grid lower endpoints differ"
+    assert target_edges[-1] == generation_edges[-1], "time-grid upper endpoints differ"
     assert df["sample_id"].is_unique, "sample_id values must be unique"
     for column in [
         "demography_type",
@@ -530,13 +574,26 @@ def validate_dataset(data_dir):
         for i in range(len(shard)):
             sample = shard.get(i, unpack=False)
             assert np.isfinite(sample["target_log10_ne"]).all(), "target contains non-finite values"
-            assert sample["generator_schema_version"] == 3, "shard schema mismatch"
+            assert sample["target_log10_ne"].dtype == np.float32, (
+                "target dtype must be float32"
+            )
+            assert sample["target_log10_ne"].shape == (target_bins,), (
+                "target width differs from manifest time grid"
+            )
+            assert sample["generator_schema_version"] == 4, "shard schema mismatch"
             assert sample["demography_type_id"] >= 0, "invalid demography_type_id"
             assert sample["generator_recipe_id"] >= 0, "invalid generator_recipe_id"
             meta = sample.get("metadata", {})
-            assert int(meta.get("generator_schema_version", -1)) == 3, (
+            assert int(meta.get("generator_schema_version", -1)) == 4, (
                 "metadata schema mismatch"
             )
+            assert int(meta.get("target_time_bins", -1)) == target_bins, (
+                "metadata target bin count mismatch"
+            )
+            assert (
+                int(meta.get("demography_generation_bins", -1))
+                == demography_generation_bins
+            ), "metadata demography generation bin count mismatch"
             demography_type = str(meta.get("demography_type", ""))
             generator_recipe = str(meta.get("generator_recipe", ""))
             assert demography_type in demography_type_ids, "unknown demography_type"
@@ -747,9 +804,12 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
         tmp_path.replace(path)
 
     edges, mids = time_grid(cfg)
+    generation_edges, generation_mids = demography_generation_grid(cfg)
     config_dict = dataclasses.asdict(cfg)
     config_dict["time_edges"] = edges.tolist()
     config_dict["time_mids"] = mids.tolist()
+    config_dict["demography_generation_time_edges"] = generation_edges.tolist()
+    config_dict["demography_generation_time_mids"] = generation_mids.tolist()
     config_dict["source_ids"] = SOURCE_IDS
     config_dict["demography_ids"] = DEMO_IDS
     config_dict["demography_type_ids"] = DEMOGRAPHY_TYPE_IDS
@@ -764,8 +824,12 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
         "dataset_name": cfg.dataset_name,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "samples": sample_manifest,
+        "time_bins": int(cfg.time_bins),
         "time_edges": edges.tolist(),
         "time_mids": mids.tolist(),
+        "demography_generation_bins": int(cfg.demography_generation_bins),
+        "demography_generation_time_edges": generation_edges.tolist(),
+        "demography_generation_time_mids": generation_mids.tolist(),
         "source_ids": SOURCE_IDS,
         "demography_ids": DEMO_IDS,
         "demography_type_ids": DEMOGRAPHY_TYPE_IDS,

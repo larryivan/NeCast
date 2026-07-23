@@ -219,7 +219,11 @@ class Config:
     compute_chunk_size: int = 16
     seq_len: int = 1_000_000
     n_haplotypes: int = 32
-    time_bins: int = 48
+    # Supervised target resolution. Population-history samplers use the
+    # separate generation grid below so changing label resolution cannot alter
+    # the latent history or consume a different random-number sequence.
+    time_bins: int = 64
+    demography_generation_bins: int = 48
     min_time: float = 50.0
     max_time: float = 500_000.0
 
@@ -309,7 +313,8 @@ def apply_preset(cfg: Config) -> Config:
         cfg.shard_size = 32
         cfg.seq_len = 1_000_000
         cfg.n_haplotypes = 24
-        cfg.time_bins = 32
+        cfg.time_bins = 64
+        cfg.demography_generation_bins = 32
         cfg.workers = 1
         cfg.enable_stdpopsim = False
         cfg.p_stdpopsim_anchor = 0.0
@@ -319,7 +324,8 @@ def apply_preset(cfg: Config) -> Config:
         cfg.shard_size = 128
         cfg.seq_len = 10_000_000
         cfg.n_haplotypes = 64
-        cfg.time_bins = 48
+        cfg.time_bins = 64
+        cfg.demography_generation_bins = 48
         cfg.workers = -1
         cfg.p_clean_constant = 0.25
         cfg.p_random_global = 0.20
@@ -332,7 +338,8 @@ def apply_preset(cfg: Config) -> Config:
         cfg.shard_size = 128
         cfg.seq_len = 20_000_000
         cfg.n_haplotypes = 64
-        cfg.time_bins = 48
+        cfg.time_bins = 64
+        cfg.demography_generation_bins = 48
         cfg.workers = -1
         cfg.p_clean_constant = 0.10
         cfg.p_random_global = 0.15
@@ -490,6 +497,7 @@ def validate_config(cfg: Config) -> None:
     seq_len = positive_integer("seq_len")
     n_haplotypes = positive_integer("n_haplotypes")
     positive_integer("time_bins")
+    positive_integer("demography_generation_bins")
 
     if n_haplotypes < 2:
         raise ValueError("n_haplotypes must be at least 2")

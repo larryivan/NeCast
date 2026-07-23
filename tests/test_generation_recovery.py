@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from simulator import shards
@@ -85,6 +86,45 @@ def test_completed_dataset_with_missing_or_extra_shards_is_rejected(tmp_path: Pa
     missing.write_bytes(b"not-a-valid-gzip")
     (out_dir / "samples" / "shard_99999.npz").write_bytes(b"stale")
     with pytest.raises(DatasetConfigMismatchError, match=r"NPZ shard files.*--force"):
+        generate_dataset(cfg, EmpiricalMapStore())
+
+
+def test_completed_dataset_missing_recipe_ids_is_rejected(tmp_path: Path) -> None:
+    out_dir = tmp_path / "dataset"
+    cfg = _config(out_dir)
+    generate_dataset(cfg, EmpiricalMapStore())
+    shard = out_dir / "samples" / "shard_00000.npz"
+    with np.load(shard, allow_pickle=False) as data:
+        arrays = {
+            key: np.asarray(data[key])
+            for key in data.files
+            if key != "generator_recipe_id"
+        }
+    np.savez(shard, **arrays)
+
+    with pytest.raises(
+        DatasetConfigMismatchError,
+        match=r"missing arrays: generator_recipe_id.*--force",
+    ):
+        generate_dataset(cfg, EmpiricalMapStore())
+
+
+def test_completed_dataset_with_misaligned_valid_type_id_is_rejected(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "dataset"
+    cfg = _config(out_dir)
+    generate_dataset(cfg, EmpiricalMapStore())
+    shard = out_dir / "samples" / "shard_00000.npz"
+    with np.load(shard, allow_pickle=False) as data:
+        arrays = {key: np.asarray(data[key]) for key in data.files}
+    arrays["demography_type_id"] = np.ones_like(arrays["demography_type_id"])
+    np.savez(shard, **arrays)
+
+    with pytest.raises(
+        DatasetConfigMismatchError,
+        match=r"metadata demography_type_id differs.*--force",
+    ):
         generate_dataset(cfg, EmpiricalMapStore())
 
 
@@ -221,6 +261,7 @@ def test_unavailable_optional_demography_is_disabled_with_a_warning(
     manifest = generate_dataset(cfg, EmpiricalMapStore())
 
     assert manifest["demography_counts"] == {"constant": 1}
+    assert manifest["generator_recipe_counts"] == {"constant": 1}
     assert "templates are unavailable" in capsys.readouterr().out
 
 

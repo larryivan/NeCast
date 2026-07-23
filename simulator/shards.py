@@ -16,8 +16,16 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from .config import DEMOGRAPHY_PROB_FIELDS, Config, validate_config
+from .config import (
+    DEMOGRAPHY_PROB_FIELDS,
+    DEMOGRAPHY_TYPE_IDS,
+    GENERATOR_RECIPE_IDS,
+    SOURCE_IDS,
+    Config,
+    validate_config,
+)
 from .dataset_state import (
+    SAMPLE_GENERATOR_SCHEMA_VERSION,
     DatasetConfigMismatchError,
     stamp_done_manifest,
     validate_done_for_reuse,
@@ -151,10 +159,13 @@ _PER_SAMPLE_ARRAYS = (
     "sample_id",
     "source_id",
     "demography_id",
+    "demography_type_id",
+    "generator_recipe_id",
     "target_log10_ne",
     "sequence_length",
 )
 _GLOBAL_ARRAYS = (
+    "generator_schema_version",
     "missing_storage",
     "packed_hap_bytes",
     "n_haplotypes",
@@ -175,6 +186,8 @@ _BASE_ARRAY_ORDER = (
     "sample_id",
     "source_id",
     "demography_id",
+    "demography_type_id",
+    "generator_recipe_id",
     "target_log10_ne",
     "variant_positions_bp",
     "variant_offsets",
@@ -182,6 +195,7 @@ _BASE_ARRAY_ORDER = (
     "missing_flat_idx",
     "missing_offsets",
     "missing_storage",
+    "generator_schema_version",
     "packed_hap_bytes",
     "n_haplotypes",
     "sequence_length",
@@ -211,6 +225,14 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
     ids = np.array([s["sample_id"] for s in samples], dtype="U64")
     source_ids = np.array([s["source_id"] for s in samples], dtype=np.int16)
     demo_ids = np.array([s["demo_id"] for s in samples], dtype=np.int16)
+    demography_type_ids = np.array(
+        [s["demography_type_id"] for s in samples],
+        dtype=np.int16,
+    )
+    generator_recipe_ids = np.array(
+        [s["generator_recipe_id"] for s in samples],
+        dtype=np.int16,
+    )
     y = np.stack([s["target_log10_ne"] for s in samples]).astype(np.float32)
 
     positions, variant_offsets = concat_with_offsets([s["positions"] for s in samples], dtype=np.uint32)
@@ -229,6 +251,8 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
         sample_id=ids,
         source_id=source_ids,
         demography_id=demo_ids,
+        demography_type_id=demography_type_ids,
+        generator_recipe_id=generator_recipe_ids,
         target_log10_ne=y,
         variant_positions_bp=positions,
         variant_offsets=variant_offsets,
@@ -236,6 +260,10 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
         missing_flat_idx=missing_flat_idx,
         missing_offsets=missing_offsets,
         missing_storage=np.array(["sparse_flat_index_uint32"], dtype="U32"),
+        generator_schema_version=np.array(
+            [SAMPLE_GENERATOR_SCHEMA_VERSION],
+            dtype=np.int16,
+        ),
         packed_hap_bytes=np.array([packed_bytes], dtype=np.int16),
         n_haplotypes=np.array([cfg.n_haplotypes], dtype=np.int16),
         sequence_length=np.array([s["metadata"]["sequence_length"] for s in samples], dtype=np.int64),
@@ -403,6 +431,7 @@ def _generate_shard(task: tuple[int, int, int, int]) -> dict:
     metadata_rows: list[dict] = []
     source_counts: dict[str, int] = {}
     demo_counts: dict[str, int] = {}
+    generator_recipe_counts: dict[str, int] = {}
     map_counts: dict[str, int] = {}
     shard_t0 = time.perf_counter()
     sample_time_sum = 0.0
@@ -421,9 +450,11 @@ def _generate_shard(task: tuple[int, int, int, int]) -> dict:
             slowest_meta = meta
         source = meta.get("source_type", "unknown")
         demo = meta.get("demography_type", "unknown")
+        generator_recipe = meta.get("generator_recipe", "unknown")
         map_mode = meta.get("map_mode", meta.get("map_type", "unknown"))
         _count_key(source_counts, source)
         _count_key(demo_counts, demo)
+        _count_key(generator_recipe_counts, generator_recipe)
         _count_key(map_counts, map_mode)
         metadata_rows.append(_metadata_row(meta))
 
@@ -447,6 +478,7 @@ def _generate_shard(task: tuple[int, int, int, int]) -> dict:
         "metadata_rows": metadata_rows,
         "source_counts": source_counts,
         "demography_counts": demo_counts,
+        "generator_recipe_counts": generator_recipe_counts,
         "map_counts": map_counts,
     }
 
@@ -659,8 +691,25 @@ def _metadata_row(meta: dict) -> dict:
         "source_type": meta.get("source_type", ""),
         "scenario": meta.get("scenario", ""),
         "scenario_key": meta.get("scenario_key", ""),
+        "generator_recipe_key": meta.get("generator_recipe_key", ""),
+        "generator_recipe": meta.get("generator_recipe", ""),
+        "generator_recipe_id": meta.get("generator_recipe_id", -1),
+        "generator_schema_version": meta.get("generator_schema_version", -1),
         "demography_type": meta.get("demography_type", ""),
+        "demography_type_id": meta.get("demography_type_id", -1),
+        "demography_id": meta.get("demography_id", -1),
+        "history_family": meta.get("history_family", ""),
         "demography_mixture_version": meta.get("demography_mixture_version", ""),
+        "demography_function": meta.get("demography_function", "piecewise_constant"),
+        "trajectory_form": meta.get("trajectory_form", ""),
+        "curve_origin": meta.get("curve_origin", ""),
+        "dataset_regime": meta.get("dataset_regime", ""),
+        "direction": meta.get("direction", ""),
+        "time_regime": meta.get("time_regime", ""),
+        "native_continuous_growth": meta.get("native_continuous_growth", False),
+        "literature_demography_anchor": meta.get("literature_demography_anchor", False),
+        "literature_model_id": meta.get("literature_model_id", ""),
+        "growth_rate_per_generation": meta.get("growth_rate_per_generation", 0.0),
         "target_quality": meta.get("target_quality", "strict_single_population"),
         "empirical_ne_template": meta.get("empirical_ne_template", False),
         "template_source_key": meta.get("template_source_key", ""),
@@ -676,7 +725,12 @@ def _metadata_row(meta: dict) -> dict:
         "recent_min_Ne": meta.get("recent_min_Ne", 0.0),
         "ancient_mean_Ne": meta.get("ancient_mean_Ne", 0.0),
         "event_severity": meta.get("event_severity", 0.0),
+        "recipe_event_severity": meta.get("recipe_event_severity", None),
         "event_duration": meta.get("event_duration", 0.0),
+        "log10_ne_range": meta.get("log10_ne_range", 0.0),
+        "total_variation_log10": meta.get("total_variation_log10", 0.0),
+        "mean_abs_log10_change": meta.get("mean_abs_log10_change", 0.0),
+        "turn_count": meta.get("turn_count", 0),
         "map_type": meta.get("map_type", ""),
         "map_mode": meta.get("map_mode", ""),
         "recomb_mode": meta.get("recomb_mode", ""),
@@ -841,6 +895,11 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
 
     required_arrays = {
         "sample_id",
+        "source_id",
+        "demography_id",
+        "demography_type_id",
+        "generator_recipe_id",
+        "generator_schema_version",
         "target_log10_ne",
         "n_haplotypes",
         "sequence_length",
@@ -863,6 +922,7 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
             raise _artifact_reuse_error(f"{relative_path} or its metadata sidecar is empty")
         total_bytes += _shard_file_bytes(shard_path)
 
+        stored_ids_for_metadata: dict[str, list[int]] = {}
         try:
             with np.load(shard_path, allow_pickle=False) as data:
                 missing = required_arrays - set(data.files)
@@ -872,6 +932,48 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                 expected_ids = [f"sim_{index:08d}" for index in range(start, start + count)]
                 if sample_ids.ndim != 1 or sample_ids.astype(str).tolist() != expected_ids:
                     raise ValueError("sample IDs do not match the shard range")
+                for id_key in (
+                    "source_id",
+                    "demography_id",
+                    "demography_type_id",
+                    "generator_recipe_id",
+                ):
+                    ids = np.asarray(data[id_key])
+                    if ids.shape != (count,) or not np.issubdtype(ids.dtype, np.integer):
+                        raise ValueError(
+                            f"{id_key} shape/dtype is {ids.shape}/{ids.dtype}, "
+                            f"expected {(count,)}/integer"
+                        )
+                valid_ids = {
+                    "source_id": set(SOURCE_IDS.values()),
+                    "demography_id": set(GENERATOR_RECIPE_IDS.values()),
+                    "demography_type_id": set(DEMOGRAPHY_TYPE_IDS.values()),
+                    "generator_recipe_id": set(GENERATOR_RECIPE_IDS.values()),
+                }
+                for id_key, allowed in valid_ids.items():
+                    if not set(np.asarray(data[id_key], dtype=np.int64)).issubset(allowed):
+                        raise ValueError(f"{id_key} contains an unknown schema-v3 ID")
+                    stored_ids_for_metadata[id_key] = np.asarray(
+                        data[id_key],
+                        dtype=np.int64,
+                    ).tolist()
+                if not np.array_equal(
+                    np.asarray(data["demography_id"]),
+                    np.asarray(data["generator_recipe_id"]),
+                ):
+                    raise ValueError(
+                        "legacy demography_id does not match generator_recipe_id"
+                    )
+                schema_version = np.asarray(
+                    data["generator_schema_version"],
+                ).reshape(-1)
+                if (
+                    schema_version.size != 1
+                    or int(schema_version[0]) != SAMPLE_GENERATOR_SCHEMA_VERSION
+                ):
+                    raise ValueError(
+                        "stored generator schema version does not match this release"
+                    )
                 target = np.asarray(data["target_log10_ne"])
                 if target.shape != (count, cfg.time_bins):
                     raise ValueError(
@@ -894,9 +996,44 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
             raise _artifact_reuse_error(f"{relative_path} is unreadable or incompatible: {exc}") from exc
 
         try:
-            with gzip.open(meta_path, "rb") as handle:
-                if not handle.read(1):
-                    raise ValueError("metadata sidecar is empty")
+            with gzip.open(meta_path, "rt", encoding="utf-8") as handle:
+                metadata_rows = [
+                    json.loads(line)
+                    for line in handle
+                    if line.strip()
+                ]
+            if len(metadata_rows) != count:
+                raise ValueError(
+                    f"metadata sidecar has {len(metadata_rows)} rows, expected {count}"
+                )
+            for index, row in enumerate(metadata_rows):
+                if str(row.get("sample_id", "")) != expected_ids[index]:
+                    raise ValueError("metadata sample IDs do not match the shard")
+                if (
+                    int(row.get("generator_schema_version", -1))
+                    != SAMPLE_GENERATOR_SCHEMA_VERSION
+                ):
+                    raise ValueError("metadata generator schema version mismatch")
+                for id_key in (
+                    "source_id",
+                    "demography_id",
+                    "demography_type_id",
+                    "generator_recipe_id",
+                ):
+                    if int(row.get(id_key, -1)) != stored_ids_for_metadata[id_key][index]:
+                        raise ValueError(f"metadata {id_key} differs from the shard array")
+                demography_type = str(row.get("demography_type", ""))
+                generator_recipe = str(row.get("generator_recipe", ""))
+                if (
+                    DEMOGRAPHY_TYPE_IDS.get(demography_type)
+                    != stored_ids_for_metadata["demography_type_id"][index]
+                ):
+                    raise ValueError("metadata demography type string/ID mismatch")
+                if (
+                    GENERATOR_RECIPE_IDS.get(generator_recipe)
+                    != stored_ids_for_metadata["generator_recipe_id"][index]
+                ):
+                    raise ValueError("metadata generator recipe string/ID mismatch")
         except Exception as exc:
             raise _artifact_reuse_error(f"{meta_path.relative_to(out_dir)} is unreadable: {exc}") from exc
 
@@ -1077,6 +1214,7 @@ def _generate_dataset_locked(cfg: Config, empirical: EmpiricalMapStore) -> dict:
     metadata_rows: list[dict] = []
     source_counts: dict[str, int] = {}
     demo_counts: dict[str, int] = {}
+    generator_recipe_counts: dict[str, int] = {}
     map_counts: dict[str, int] = {}
     completed_samples = 0
     completed_fragment_bytes = 0
@@ -1090,6 +1228,10 @@ def _generate_dataset_locked(cfg: Config, empirical: EmpiricalMapStore) -> dict:
         metadata_rows.extend(result.pop("metadata_rows"))
         _merge_counts(source_counts, result.pop("source_counts"))
         _merge_counts(demo_counts, result.pop("demography_counts"))
+        _merge_counts(
+            generator_recipe_counts,
+            result.pop("generator_recipe_counts"),
+        )
         _merge_counts(map_counts, result.pop("map_counts"))
         fragment_results.setdefault(int(result["shard_idx"]), []).append(result)
         progress.update(int(result["n_samples"]))
@@ -1166,6 +1308,7 @@ def _generate_dataset_locked(cfg: Config, empirical: EmpiricalMapStore) -> dict:
         "empirical_maps": empirical.metadata,
         "source_counts": source_counts,
         "demography_counts": demo_counts,
+        "generator_recipe_counts": generator_recipe_counts,
         "map_counts": map_counts,
         "samples_bytes": int(completed_bytes),
         "samples_gb": float(samples_gb),

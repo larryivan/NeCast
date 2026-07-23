@@ -5,7 +5,15 @@ import json
 import time
 from pathlib import Path
 
-from .config import Config, DEMO_IDS, SOURCE_IDS, validate_config
+from .config import (
+    DEMOGRAPHY_TYPE_IDS,
+    DEMO_IDS,
+    GENERATOR_RECIPE_IDS,
+    SOURCE_IDS,
+    Config,
+    validate_config,
+)
+from .dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
 from .utils import time_grid
 
 
@@ -41,6 +49,10 @@ not precomputed in the core dataset.
 Shard files are written as lossless NPZ archives using the configured DEFLATE
 level. Missing genotypes are stored as sparse per-sample row-major indices
 (`missing_flat_idx`, `missing_offsets`) rather than as a dense missing matrix.
+Each sample stores a merged scientific `demography_type_id` and an append-only
+`generator_recipe_id`. The legacy `demography_id` remains an exact alias of
+`generator_recipe_id`, preserving its historical numeric namespace. Decode IDs
+with the mappings in `config.json` or `manifest.json`.
 
 Targets are log-time bin averages, not midpoint samples. This keeps short
 events such as recent bottlenecks visible in labels when they overlap a time bin.
@@ -48,19 +60,32 @@ Main simulator samples are generated as diploid individuals (`ploidy=2`), so
 `n_haplotypes` must be even. Phase switch noise swaps the two haplotypes within
 each diploid individual after sampled switch points; this is recorded as
 `phase_switch_model="diploid_pair_switch"` and `phase_pairing`.
-`scenario_key` combines demography, map mode, and noise profile for convenient
-filtering without making fixed train/validation/test splits.
+`scenario_key` combines the public demography type, map mode, and noise profile
+for convenient filtering without making fixed train/validation/test splits.
+`generator_recipe_key` provides the same grouping at the fine-grained recipe
+level.
 
 Demography sampling uses a registry of named samplers rather than one large
 conditional block. It includes constant and near-constant controls, recent
-bottlenecks, recent founder recovery, continuous exponential growth/decline
-approximated by multiple epochs, serial founder events, ancient+recent compound
-events, mild/strong oscillating histories, dense bin-aligned histories, classic
-sawtooth histories, and optional empirical human Ne templates inferred by tools
-such as SMC++, PHLaSH, and MSMC2. Metadata includes summary fields
-such as `n_epochs`, `has_recent_event`, `has_ancient_event`, `min_Ne`, `max_Ne`,
+bottlenecks, recent founder recovery, native continuous exponential
+growth/decline, serial founder events, ancient+recent compound events,
+mild/strong continuous zigzag histories, dense bin-aligned histories, opt-in
+fixed `Zigzag_1S14` and SMC++ sawtooth validation models, and optional
+empirical human Ne templates inferred by tools such as SMC++, PHLaSH, and
+MSMC2. Continuous
+histories use msprime growth rates directly, and their labels are analytic
+log-time averages of the same trajectory. Metadata includes the full
+`demography_breaks`, `demography_values`, and `demography_growth_rates` needed
+to reconstruct the ground truth. The public `demography_type` is consolidated
+into interpretable scientific classes such as `constant`, `bottleneck`,
+`exponential_growth`, and `zigzag`; the exact original sampler name remains in
+`generator_recipe` for reproducibility. Summary fields include `n_epochs`,
+`has_recent_event`, `has_ancient_event`, `min_Ne`, `max_Ne`,
 `Ne_ratio_max_min`, `recent_min_Ne`, `ancient_mean_Ne`, `event_severity`, and
-`event_duration` for filtering and benchmark recipes.
+`event_duration` for filtering and benchmark recipes. `event_severity` is
+uniformly `min_Ne / max_Ne`; any recipe-specific legacy definition is preserved
+as `recipe_event_severity`. Shape descriptors include `log10_ne_range`,
+`total_variation_log10`, `turn_count`, `direction`, and `trajectory_form`.
 Sample quality metadata includes `variant_density_per_mb`, explicit noise rates,
 missing genotype counts, phase switch counts, and observed map rate summaries
 (`mean/std/min/max`) for quick corpus filtering without reading the shard arrays.
@@ -70,7 +95,9 @@ default (`p_stdpopsim_anchor=0`) and are included only when requested with
 `--enable-stdpopsim`. Their target metadata keeps `target_quality` because many
 stdpopsim models include population structure, migration, or admixture, so these
 anchors should not be treated as the same strict single-population supervision as
-the custom simulator samples.
+the custom simulator samples. Native growth rates are preserved for the selected
+population, but the target remains a proxy whenever the source model is
+structured.
 Two-population migration/admixture stress cases should follow the same anchor
 pattern and be labeled with proxy target quality rather than mixed into the strict
 single-population supervised core.
@@ -157,6 +184,11 @@ class DLCoalSimShard:
     def __init__(self, shard_path):
         self.shard_path = Path(shard_path)
         self.data = np.load(self.shard_path, allow_pickle=False)
+        self.generator_schema_version = int(self.data["generator_schema_version"][0])
+        if self.generator_schema_version != 3:
+            raise ValueError(
+                f"unsupported generator schema: {self.generator_schema_version}"
+            )
         self.n = len(self.data["sample_id"])
         self.n_haplotypes = int(self.data["n_haplotypes"][0])
         self.packed_hap_bytes = int(self.data["packed_hap_bytes"][0])
@@ -194,6 +226,11 @@ class DLCoalSimShard:
         seq_len = int(seq[i] if len(seq) > 1 else seq[0])
         sample = {
             "sample_id": str(self.data["sample_id"][i]),
+            "source_id": int(self.data["source_id"][i]),
+            "demography_id": int(self.data["demography_id"][i]),
+            "demography_type_id": int(self.data["demography_type_id"][i]),
+            "generator_recipe_id": int(self.data["generator_recipe_id"][i]),
+            "generator_schema_version": self.generator_schema_version,
             "sequence_length": seq_len,
             "n_haplotypes": self.n_haplotypes,
             "positions_bp": pos,
@@ -328,7 +365,17 @@ def show_metadata_card(sample):
         "sample_id",
         "source_type",
         "scenario_key",
+        "generator_recipe",
+        "generator_recipe_id",
         "demography_type",
+        "demography_type_id",
+        "demography_id",
+        "history_family",
+        "trajectory_form",
+        "curve_origin",
+        "dataset_regime",
+        "direction",
+        "time_regime",
         "map_mode",
         "noise_profile",
         "n_variants",
@@ -341,7 +388,11 @@ def show_metadata_card(sample):
         "max_Ne",
         "Ne_ratio_max_min",
         "event_severity",
+        "recipe_event_severity",
         "event_duration",
+        "log10_ne_range",
+        "total_variation_log10",
+        "turn_count",
         "genotype_error",
         "missing_rate",
         "n_missing_genotypes",
@@ -451,7 +502,20 @@ def validate_dataset(data_dir):
 
     df = pd.read_csv(meta_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    demography_type_ids = manifest.get("demography_type_ids")
+    generator_recipe_ids = manifest.get("generator_recipe_ids")
+    generator_schema_version = manifest.get("generator_schema_version")
+    assert isinstance(demography_type_ids, dict), "manifest has no demography type ID map"
+    assert isinstance(generator_recipe_ids, dict), "manifest has no generator recipe ID map"
+    assert generator_schema_version == 3, "unsupported generator schema"
     assert df["sample_id"].is_unique, "sample_id values must be unique"
+    for column in [
+        "demography_type",
+        "demography_type_id",
+        "generator_recipe",
+        "generator_recipe_id",
+    ]:
+        assert column in df, f"missing metadata column: {column}"
     assert df["n_variants"].ge(0).all(), "n_variants must be non-negative"
     assert df["sequence_length"].gt(0).all(), "sequence_length must be positive"
     for column in ["mean_obs_rec_rate", "mean_obs_mut_rate", "variant_density_per_mb"]:
@@ -466,6 +530,26 @@ def validate_dataset(data_dir):
         for i in range(len(shard)):
             sample = shard.get(i, unpack=False)
             assert np.isfinite(sample["target_log10_ne"]).all(), "target contains non-finite values"
+            assert sample["generator_schema_version"] == 3, "shard schema mismatch"
+            assert sample["demography_type_id"] >= 0, "invalid demography_type_id"
+            assert sample["generator_recipe_id"] >= 0, "invalid generator_recipe_id"
+            meta = sample.get("metadata", {})
+            assert int(meta.get("generator_schema_version", -1)) == 3, (
+                "metadata schema mismatch"
+            )
+            demography_type = str(meta.get("demography_type", ""))
+            generator_recipe = str(meta.get("generator_recipe", ""))
+            assert demography_type in demography_type_ids, "unknown demography_type"
+            assert generator_recipe in generator_recipe_ids, "unknown generator_recipe"
+            assert sample["demography_type_id"] == int(
+                demography_type_ids[demography_type]
+            ), "demography type ID/string mismatch"
+            assert sample["generator_recipe_id"] == int(
+                generator_recipe_ids[generator_recipe]
+            ), "generator recipe ID/string mismatch"
+            assert sample["demography_id"] == sample["generator_recipe_id"], (
+                "legacy demography_id/generator_recipe_id mismatch"
+            )
             assert sample["sequence_length"] > 0, "sample sequence_length must be positive"
             _check_monotone("variant", sample["positions_bp"])
             _check_monotone("observed recombination", sample["observed_recombination"]["position_bp"])
@@ -594,6 +678,7 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
                 _code("df = pd.read_csv(META_PATH)\ndf.head()"),
                 _code("plot_column_distribution(df, 'source_type')"),
                 _code("plot_column_distribution(df, 'demography_type')"),
+                _code("plot_column_distribution(df, 'generator_recipe')"),
                 _code("plot_column_distribution(df, 'map_mode')"),
                 _code("plot_column_distribution(df, 'noise_profile')"),
                 _code("plot_numeric_distribution(df, 'n_variants', bins=50)"),
@@ -640,7 +725,7 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
                 _code("import numpy as np\nimport pandas as pd\n\nfrom scripts.validate_dataset import validate_dataset"),
                 _code("df = pd.read_csv(META_PATH)\ndf.describe(include='all')"),
                 _code("assert df['n_variants'].ge(0).all()\nassert df['sequence_length'].gt(0).all()\nassert np.isfinite(df['variant_density_per_mb']).all()\nassert np.isfinite(df['mean_obs_rec_rate']).all()\nassert np.isfinite(df['mean_obs_mut_rate']).all()\nprint('metadata checks passed')"),
-                _code("df[['source_type', 'demography_type', 'map_mode', 'noise_profile']].apply(lambda s: s.value_counts()).fillna(0)"),
+                _code("df[['source_type', 'demography_type', 'generator_recipe', 'map_mode', 'noise_profile']].apply(lambda s: s.value_counts()).fillna(0)"),
                 _code("df[['n_variants', 'variant_density_per_mb', 'missing_rate', 'n_missing_genotypes', 'mean_obs_rec_rate', 'mean_obs_mut_rate', 'Ne_ratio_max_min']].hist(figsize=(12, 8), bins=40);"),
                 _code("validate_dataset(DATA_DIR)"),
             ]
@@ -667,6 +752,9 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
     config_dict["time_mids"] = mids.tolist()
     config_dict["source_ids"] = SOURCE_IDS
     config_dict["demography_ids"] = DEMO_IDS
+    config_dict["demography_type_ids"] = DEMOGRAPHY_TYPE_IDS
+    config_dict["generator_recipe_ids"] = GENERATOR_RECIPE_IDS
+    config_dict["generator_schema_version"] = SAMPLE_GENERATOR_SCHEMA_VERSION
     write_atomic(
         out / "config.json",
         json.dumps(config_dict, indent=2, ensure_ascii=False),
@@ -680,6 +768,9 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
         "time_mids": mids.tolist(),
         "source_ids": SOURCE_IDS,
         "demography_ids": DEMO_IDS,
+        "demography_type_ids": DEMOGRAPHY_TYPE_IDS,
+        "generator_recipe_ids": GENERATOR_RECIPE_IDS,
+        "generator_schema_version": SAMPLE_GENERATOR_SCHEMA_VERSION,
     }
     (out / "README.md").write_text(README_TEMPLATE.format(dataset_name=cfg.dataset_name), encoding="utf-8")
 

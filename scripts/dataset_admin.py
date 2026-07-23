@@ -18,9 +18,21 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from simulator.config import (
+    DEMOGRAPHY_TYPE_IDS,
+    GENERATOR_RECIPE_IDS,
+    SOURCE_IDS,
+)
+from simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
+
 
 REQUIRED_NPZ_KEYS = {
     "sample_id",
+    "source_id",
+    "demography_id",
+    "demography_type_id",
+    "generator_recipe_id",
+    "generator_schema_version",
     "target_log10_ne",
     "variant_positions_bp",
     "variant_offsets",
@@ -98,6 +110,40 @@ def check_shard(path: Path) -> list[str]:
 
         ids = [str(x) for x in data["sample_id"]]
         n = len(ids)
+        sample_id_keys = (
+            "source_id",
+            "demography_id",
+            "demography_type_id",
+            "generator_recipe_id",
+        )
+        stored_ids: dict[str, list[int]] = {}
+        for key in sample_id_keys:
+            values = data[key]
+            if values.shape != (n,) or not np.issubdtype(values.dtype, np.integer):
+                raise ValueError(
+                    f"{path.name}: {key} shape/dtype is "
+                    f"{values.shape}/{values.dtype}, expected {(n,)}/integer"
+                )
+            stored_ids[key] = np.asarray(values, dtype=np.int64).tolist()
+        allowed_ids = {
+            "source_id": set(SOURCE_IDS.values()),
+            "demography_id": set(GENERATOR_RECIPE_IDS.values()),
+            "demography_type_id": set(DEMOGRAPHY_TYPE_IDS.values()),
+            "generator_recipe_id": set(GENERATOR_RECIPE_IDS.values()),
+        }
+        for key, allowed in allowed_ids.items():
+            if not set(stored_ids[key]).issubset(allowed):
+                raise ValueError(f"{path.name}: {key} contains an unknown schema-v3 ID")
+        if stored_ids["demography_id"] != stored_ids["generator_recipe_id"]:
+            raise ValueError(
+                f"{path.name}: legacy demography_id differs from generator_recipe_id"
+            )
+        schema_version = np.asarray(data["generator_schema_version"]).reshape(-1)
+        if (
+            schema_version.size != 1
+            or int(schema_version[0]) != SAMPLE_GENERATOR_SCHEMA_VERSION
+        ):
+            raise ValueError(f"{path.name}: unsupported generator schema")
         h = int(data["n_haplotypes"][0])
         packed_bytes = int(data["packed_hap_bytes"][0])
         if packed_bytes != int(np.ceil(h / 8)):
@@ -139,9 +185,25 @@ def check_shard(path: Path) -> list[str]:
     shard_meta = path.with_suffix(".jsonl.gz")
     if not shard_meta.exists():
         raise ValueError(f"missing {shard_meta}")
-    meta_ids = [str(row.get("sample_id", "")) for row in read_jsonl_gz(shard_meta)]
+    metadata_rows = read_jsonl_gz(shard_meta)
+    meta_ids = [str(row.get("sample_id", "")) for row in metadata_rows]
     if meta_ids != ids:
         raise ValueError(f"{shard_meta.name}: sample_id order differs from npz")
+    for index, row in enumerate(metadata_rows):
+        if (
+            int(row.get("generator_schema_version", -1))
+            != SAMPLE_GENERATOR_SCHEMA_VERSION
+        ):
+            raise ValueError(f"{shard_meta.name}: generator schema version mismatch")
+        for key in sample_id_keys:
+            if int(row.get(key, -1)) != stored_ids[key][index]:
+                raise ValueError(f"{shard_meta.name}: {key} differs from npz")
+        demography_type = str(row.get("demography_type", ""))
+        generator_recipe = str(row.get("generator_recipe", ""))
+        if DEMOGRAPHY_TYPE_IDS.get(demography_type) != stored_ids["demography_type_id"][index]:
+            raise ValueError(f"{shard_meta.name}: demography type string/ID mismatch")
+        if GENERATOR_RECIPE_IDS.get(generator_recipe) != stored_ids["generator_recipe_id"][index]:
+            raise ValueError(f"{shard_meta.name}: generator recipe string/ID mismatch")
     return ids
 
 
@@ -220,6 +282,7 @@ def update_manifest_after_drop(
     counts = {
         "source_counts": "source_type",
         "demography_counts": "demography_type",
+        "generator_recipe_counts": "generator_recipe",
         "map_counts": "map_mode",
     }
     if df is not None:

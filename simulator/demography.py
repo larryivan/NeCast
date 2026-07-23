@@ -6,7 +6,15 @@ from typing import Sequence
 import msprime
 import numpy as np
 
-from .config import Config
+from .config import (
+    DEMOGRAPHY_TYPE_IDS,
+    GENERATOR_RECIPE_IDS,
+    GENERATOR_RECIPE_HISTORY_FAMILY_OVERRIDES,
+    GENERATOR_RECIPE_TO_DEMOGRAPHY_TYPE,
+    HISTORY_FAMILY_BY_DEMOGRAPHY_TYPE,
+    ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE,
+    Config,
+)
 from .ne_templates import empirical_ne_templates_available, load_empirical_ne_templates
 from .utils import bin_average_log10_ne, loguniform, piecewise_eval, time_grid
 
@@ -26,6 +34,8 @@ DEMO_PROB_FIELDS = [
     ("dense_multiscale_random_walk", "p_dense_multiscale_random_walk"),
     ("dense_recent_wiggle", "p_dense_recent_wiggle"),
     ("classic_sawtooth", "p_classic_sawtooth"),
+    ("canonical_zigzag_1s14", "p_canonical_zigzag_1s14"),
+    ("canonical_smcpp_sawtooth", "p_canonical_smcpp_sawtooth"),
     ("empirical_human_ne_template", "p_empirical_human_ne_template"),
     ("smooth_random_walk_stress", "p_smooth_random_walk_stress"),
     ("dense_random_walk_stress", "p_dense_random_walk_stress"),
@@ -46,55 +56,251 @@ DEMO_PROB_FIELDS = [
     ("ancient_recent_conflict", "p_ancient_recent_conflict"),
     ("oscillating_mild", "p_oscillating_mild"),
     ("zigzag_strong", "p_zigzag_strong"),
-    # Legacy step-change/zigzag stress samplers. Kept at low default weight.
+    # Legacy configuration keys remain accepted for backwards-compatible configs.
     ("expansion", "p_expansion"),
     ("contraction", "p_contraction"),
     ("zigzag", "p_zigzag"),
 ]
 
 
-def build_demography(breaks: Sequence[float], values: Sequence[float]) -> msprime.Demography:
+def build_demography(
+    breaks: Sequence[float],
+    values: Sequence[float],
+    growth_rates: Sequence[float] | None = None,
+) -> msprime.Demography:
+    if growth_rates is None:
+        growth_rates = [0.0] * len(values)
+    if len(growth_rates) != len(values):
+        raise ValueError("growth_rates must contain one rate per demographic epoch")
     dem = msprime.Demography()
-    dem.add_population(name="pop", initial_size=float(values[0]))
-    for t, n in zip(breaks, values[1:]):
-        dem.add_population_parameters_change(time=float(t), initial_size=float(n), population="pop")
+    dem.add_population(
+        name="pop",
+        initial_size=float(values[0]),
+        growth_rate=float(growth_rates[0]),
+    )
+    for t, n, growth_rate in zip(breaks, values[1:], growth_rates[1:]):
+        dem.add_population_parameters_change(
+            time=float(t),
+            initial_size=float(n),
+            growth_rate=float(growth_rate),
+            population="pop",
+        )
     dem.sort_events()
     return dem
 
 
-def _clean_breaks_values(breaks: Sequence[float], values: Sequence[float], t_max: float) -> tuple[list[float], list[float]]:
+def _clean_demography(
+    breaks: Sequence[float],
+    values: Sequence[float],
+    growth_rates: Sequence[float] | None,
+) -> tuple[list[float], list[float], list[float]]:
     if len(values) != len(breaks) + 1:
         raise ValueError("demography values must have exactly one more item than breaks")
-    pairs = sorted((float(t), float(v)) for t, v in zip(breaks, values[1:]) if 0 < float(t) < t_max)
+    if growth_rates is None:
+        growth_rates = [0.0] * len(values)
+    if len(growth_rates) != len(values):
+        raise ValueError("growth_rates must contain one rate per demographic epoch")
+    pairs = sorted(
+        (float(t), float(v), float(g))
+        for t, v, g in zip(breaks, values[1:], growth_rates[1:])
+        if np.isfinite(t) and float(t) > 0
+    )
     out_breaks: list[float] = []
     out_values = [float(values[0])]
+    out_growth_rates = [float(growth_rates[0])]
     last = 0.0
-    for t, v in pairs:
+    for t, v, growth_rate in pairs:
         if t <= last + 1e-6:
             continue
         out_breaks.append(t)
         out_values.append(float(np.clip(v, 50.0, 2_000_000.0)))
+        out_growth_rates.append(growth_rate)
         last = t
     out_values[0] = float(np.clip(out_values[0], 50.0, 2_000_000.0))
-    return out_breaks, out_values
+    if not np.all(np.isfinite(out_growth_rates)):
+        raise ValueError("demography growth rates must be finite")
+    return out_breaks, out_values, out_growth_rates
 
 
-def _summary(edges: np.ndarray, breaks: Sequence[float], values: Sequence[float], meta: dict) -> dict:
+def resolve_demography_type(
+    generator_recipe: str,
+    values: Sequence[float],
+    meta: dict,
+) -> str:
+    """Map a fine-grained generator recipe to its public scientific type."""
+    if generator_recipe == "ultra_stress":
+        stress_type = str(meta.get("stress_type", ""))
+        try:
+            return ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE[stress_type]
+        except KeyError as exc:
+            raise ValueError(f"Unknown ultra-stress recipe subtype: {stress_type!r}") from exc
+    if generator_recipe == "ancient_event":
+        present_ne = float(values[0])
+        ancient_ne = float(values[-1])
+        if present_ne > ancient_ne:
+            return "expansion"
+        if present_ne < ancient_ne:
+            return "contraction"
+        return "constant"
+    try:
+        demography_type = GENERATOR_RECIPE_TO_DEMOGRAPHY_TYPE[generator_recipe]
+    except KeyError as exc:
+        raise ValueError(f"Unknown demography generator recipe: {generator_recipe!r}") from exc
+    if demography_type is None:
+        raise ValueError(f"Generator recipe {generator_recipe!r} requires dynamic classification")
+    return demography_type
+
+
+def _trajectory_form(
+    generator_recipe: str,
+    breaks: Sequence[float],
+    growth_rates: Sequence[float],
+    meta: dict,
+) -> str:
+    if generator_recipe == "constant":
+        return "constant"
+    if generator_recipe == "empirical_human_ne_template":
+        return "empirical_template"
+    if meta.get("bin_aligned_demography", False):
+        return "bin_aligned_piecewise_constant"
+    if any(abs(float(rate)) > 0.0 for rate in growth_rates):
+        if meta.get("demography_function") == "exponential_linear_time" and len(breaks) == 1:
+            return "exponential_linear_time"
+        return "piecewise_exponential"
+    if len(breaks) == 1:
+        return "step"
+    return "piecewise_step"
+
+
+def trajectory_shape_values(
+    edges: np.ndarray,
+    breaks: Sequence[float],
+    values: Sequence[float],
+    growth_rates: Sequence[float],
+) -> np.ndarray:
+    """Return ordered left/right-limit values from the present to target max."""
+    values_arr = np.asarray(values, dtype=np.float64)
+    rates_arr = np.asarray(growth_rates, dtype=np.float64)
+    breaks_arr = np.asarray(breaks, dtype=np.float64)
+    if len(values_arr) != len(breaks_arr) + 1 or len(rates_arr) != len(values_arr):
+        raise ValueError("invalid demographic epoch arrays")
+
+    left = 0.0
+    right = float(edges[-1])
+    starts = np.concatenate(([0.0], breaks_arr))
+
+    def epoch_value(epoch: int, time: float) -> float:
+        elapsed = time - float(starts[epoch])
+        with np.errstate(over="raise", invalid="raise"):
+            result = float(values_arr[epoch] * np.exp(-rates_arr[epoch] * elapsed))
+        if not np.isfinite(result) or result <= 0.0:
+            raise ValueError("demographic trajectory has a non-finite or non-positive size")
+        return result
+
+    left_epoch = int(np.searchsorted(breaks_arr, left, side="right"))
+    path = [epoch_value(left_epoch, left)]
+    for epoch, boundary in enumerate(breaks_arr):
+        if left < float(boundary) < right:
+            # Preserve both limits when an instantaneous size reset accompanies
+            # a rate change. Smooth transitions simply contribute a duplicate.
+            path.append(epoch_value(epoch, float(boundary)))
+            post_change = float(values_arr[epoch + 1])
+            if not np.isfinite(post_change) or post_change <= 0.0:
+                raise ValueError(
+                    "demographic trajectory has a non-finite or non-positive size"
+                )
+            path.append(post_change)
+    right_epoch = int(np.searchsorted(breaks_arr, right, side="left"))
+    path.append(epoch_value(right_epoch, right))
+    return np.asarray(path, dtype=np.float64)
+
+
+def summarize_demography(
+    edges: np.ndarray,
+    breaks: Sequence[float],
+    values: Sequence[float],
+    growth_rates: Sequence[float],
+    meta: dict,
+    *,
+    generator_recipe: str,
+    demography_type: str,
+) -> dict:
     t_max = float(edges[-1])
-    grid = np.geomspace(float(edges[0]), t_max, 256)
-    ne = piecewise_eval(grid, breaks, values)
     recent_grid = np.geomspace(float(edges[0]), min(5_000.0, t_max), 96)
     ancient_left = min(max(50_000.0, float(edges[0])), t_max)
     ancient_grid = np.geomspace(ancient_left, t_max, 96) if ancient_left < t_max else np.array([t_max])
-    recent_ne = piecewise_eval(recent_grid, breaks, values)
-    ancient_ne = piecewise_eval(ancient_grid, breaks, values)
-    values_arr = np.asarray(values, dtype=np.float64)
-    min_ne = float(np.min(values_arr))
-    max_ne = float(np.max(values_arr))
+    recent_ne = piecewise_eval(recent_grid, breaks, values, growth_rates)
+    ancient_ne = piecewise_eval(ancient_grid, breaks, values, growth_rates)
+    if (
+        not np.all(np.isfinite(recent_ne))
+        or not np.all(np.isfinite(ancient_ne))
+        or np.any(recent_ne <= 0.0)
+        or np.any(ancient_ne <= 0.0)
+    ):
+        raise ValueError("demographic trajectory summary is non-finite or non-positive")
+    shape_values = trajectory_shape_values(
+        edges,
+        breaks,
+        values,
+        growth_rates,
+    )
+    min_ne = float(np.min(shape_values))
+    max_ne = float(np.max(shape_values))
+    log10_values = np.log10(shape_values)
+    log10_diffs = np.diff(log10_values)
+    nonzero_diffs = log10_diffs[np.abs(log10_diffs) > 1e-12]
+    signs = np.sign(nonzero_diffs)
+    turn_count = int(np.sum(signs[1:] != signs[:-1])) if signs.size > 1 else 0
+    log10_ne_range = float(np.max(log10_values) - np.min(log10_values))
+    total_variation_log10 = float(np.sum(np.abs(log10_diffs)))
+    if log10_ne_range <= 1e-12:
+        direction = "stable"
+    elif turn_count > 0:
+        direction = "mixed"
+    elif shape_values[0] > shape_values[-1]:
+        direction = "toward_present_growth"
+    else:
+        direction = "toward_present_decline"
+
+    if not breaks:
+        time_regime = "none"
+    else:
+        min_break = float(min(breaks))
+        max_break = float(max(breaks))
+        if min_break <= 5_000.0 and max_break >= 50_000.0:
+            time_regime = "multiscale"
+        elif max_break <= 5_000.0:
+            time_regime = "recent"
+        elif min_break >= 50_000.0:
+            time_regime = "ancient"
+        else:
+            time_regime = "intermediate"
+
     event_duration = float(meta.get("event_duration", 0.0))
-    severity = float(meta.get("event_severity", min_ne / max(max_ne, 1.0)))
+    recipe_severity = meta.get("event_severity")
+    if recipe_severity is not None:
+        recipe_severity = float(recipe_severity)
+    severity = float(min_ne / max(max_ne, 1.0))
     has_recent = bool(meta.get("has_recent_event", any(float(t) <= 5_000.0 for t in breaks)))
     has_ancient = bool(meta.get("has_ancient_event", any(float(t) >= 50_000.0 for t in breaks)))
+    if generator_recipe == "stdpopsim":
+        curve_origin = "catalog_model"
+        dataset_regime = "anchor"
+    elif meta.get("literature_demography_anchor", False):
+        curve_origin = "literature_anchor"
+        dataset_regime = "benchmark"
+    elif meta.get("empirical_ne_template", False):
+        curve_origin = "empirical_derived"
+        dataset_regime = "normal"
+    elif meta.get("ultra_stress_scenario", False):
+        curve_origin = "generic_synthetic"
+        dataset_regime = "ultra"
+    elif meta.get("stress_scenario", False):
+        curve_origin = "generic_synthetic"
+        dataset_regime = "extreme"
+    else:
+        curve_origin = "generic_synthetic"
+        dataset_regime = "normal"
     return {
         "n_epochs": int(len(values)),
         "n_change_points": int(len(breaks)),
@@ -106,29 +312,65 @@ def _summary(edges: np.ndarray, breaks: Sequence[float], values: Sequence[float]
         "recent_min_Ne": float(np.min(recent_ne)),
         "ancient_mean_Ne": float(np.mean(ancient_ne)),
         "event_severity": severity,
+        "recipe_event_severity": recipe_severity,
         "event_duration": event_duration,
-        "time_span_min": float(edges[0]),
+        "log10_ne_range": log10_ne_range,
+        "total_variation_log10": total_variation_log10,
+        "mean_abs_log10_change": float(
+            total_variation_log10 / max(1, len(nonzero_diffs))
+        ),
+        "turn_count": turn_count,
+        "direction": direction,
+        "time_regime": time_regime,
+        "trajectory_form": _trajectory_form(
+            generator_recipe,
+            breaks,
+            growth_rates,
+            meta,
+        ),
+        "curve_origin": curve_origin,
+        "dataset_regime": dataset_regime,
+        "history_family": GENERATOR_RECIPE_HISTORY_FAMILY_OVERRIDES.get(
+            generator_recipe,
+            HISTORY_FAMILY_BY_DEMOGRAPHY_TYPE[demography_type],
+        ),
+        "time_span_min": 0.0,
+        "target_time_span_min": float(edges[0]),
         "time_span_max": t_max,
     }
 
 
-def _piecewise_exponential(
+def _native_exponential_transition(
     present_ne: float,
     older_ne: float,
     start: float,
-    cfg: Config,
-    n_steps: int = 20,
-) -> tuple[list[float], list[float]]:
-    t0 = max(float(cfg.min_time), 1.0)
-    if start <= t0 * 1.05:
-        return [start], [present_ne, older_ne]
-    breaks = np.geomspace(t0, start, n_steps).tolist()
-    values = [present_ne]
-    for t in breaks:
-        frac = np.log(t / t0) / max(np.log(start / t0), 1e-12)
-        log_ne = (1.0 - frac) * np.log(present_ne) + frac * np.log(older_ne)
-        values.append(float(np.exp(log_ne)))
-    return breaks, values
+) -> tuple[list[float], list[float], list[float]]:
+    """Return an exact linear-time exponential transition for msprime.
+
+    Positive growth rates mean growth towards the present, following msprime's
+    backward-time convention ``N(t) = N(0) exp(-g t)``.
+    """
+    if start <= 0:
+        raise ValueError("exponential transition time must be positive")
+    growth_rate = float(np.log(present_ne / older_ne) / start)
+    return [float(start)], [float(present_ne), float(older_ne)], [growth_rate, 0.0]
+
+
+def _boundary_values(
+    initial_size: float,
+    breaks: Sequence[float],
+    growth_rates: Sequence[float],
+) -> list[float]:
+    """Calculate continuous epoch-boundary sizes under msprime semantics."""
+    if len(growth_rates) != len(breaks) + 1:
+        raise ValueError("growth_rates must contain one rate per demographic epoch")
+    values = [float(initial_size)]
+    previous_time = 0.0
+    for index, boundary in enumerate(breaks):
+        elapsed = float(boundary) - previous_time
+        values.append(float(values[-1] * np.exp(-float(growth_rates[index]) * elapsed)))
+        previous_time = float(boundary)
+    return values
 
 
 def _smoothed_array(arr: np.ndarray, win: int) -> np.ndarray:
@@ -373,34 +615,148 @@ def _single_bottleneck(rng: np.random.Generator, cfg: Config, edges: np.ndarray,
     }
 
 
-def _classic_sawtooth(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
-    x = (np.log(mids) - np.log(edges[0])) / max(np.log(edges[-1] / edges[0]), 1e-12)
-    cycles = int(rng.integers(2, 5))
-    phase = rng.uniform(-0.08, 0.08)
-    z = (cycles * x + phase) % 1.0
-    tri = 1.0 - 4.0 * np.abs(z - 0.5)
-
-    baseline = rng.uniform(4.05, 4.65)
-    amplitude = rng.uniform(0.38, 0.72)
-    trend = rng.uniform(-0.16, 0.16)
-    jitter_sd = rng.uniform(0.0, 0.025)
-    jitter = rng.normal(0.0, jitter_sd, size=cfg.time_bins)
-    arr = np.clip(baseline + amplitude * tri + trend * (x - 0.5) + jitter, 3.2, 5.65)
-    breaks, values = _bin_aligned_values(arr, edges, lo=1_000.0, hi=1_000_000.0)
+def _canonical_zigzag_1s14(
+    rng: np.random.Generator,
+    cfg: Config,
+    edges: np.ndarray,
+    mids: np.ndarray,
+) -> SamplerResult:
+    # Exact stdpopsim Zigzag_1S14 port of the validation model introduced by
+    # Schiffels & Durbin (2014), doi:10.1038/ng.3015. The fixed parameters are
+    # intentionally independent of the output label grid and random seed.
+    n0 = 5.0 * 14_312.0
+    breaks = [
+        33.333334976,
+        133.3334544,
+        533.33324512,
+        2_133.3352704,
+        8_533.329632,
+        34_133.318528,
+    ]
+    growth_rates = [
+        0.0,
+        0.02302578256,
+        -0.0057564631,
+        0.00143911578,
+        -0.0003597785,
+        8.9944801565e-5,
+        0.0,
+    ]
+    values = _boundary_values(n0, breaks, growth_rates)
+    # The catalog model explicitly resets the ancient population size. The
+    # rounded published rates otherwise differ by about 0.0006%.
+    values[-1] = n0 / 10.0
     return breaks, values, {
         "classic_demography_model": True,
-        "dense_demography": True,
-        "dense_type": "classic_sawtooth",
-        "bin_aligned_demography": True,
+        "literature_demography_anchor": True,
+        "literature_model_id": "Zigzag_1S14",
+        "literature_reference": "Schiffels_and_Durbin_2014",
+        "demography_function": "piecewise_exponential_linear_time",
+        "native_continuous_growth": True,
+        "demography_growth_rates": growth_rates,
+        "dense_type": "canonical_zigzag_1s14",
         "knot_count": int(len(values)),
-        "sawtooth_cycles": int(cycles),
-        "sawtooth_phase": float(phase),
-        "sawtooth_baseline_log10": float(baseline),
-        "sawtooth_amplitude_log10": float(amplitude),
-        "sawtooth_trend_log10": float(trend),
-        "sawtooth_jitter_sd": float(jitter_sd),
+        "sawtooth_cycles": 2.5,
+        "sawtooth_exponential_segment_count": 5,
+        "sawtooth_internal_extrema_count": 4,
+        "sawtooth_randomized": False,
         "has_recent_event": True,
-        "has_ancient_event": True,
+        "has_ancient_event": False,
+        "event_severity": float(min(values) / max(values)),
+    }
+
+
+def _canonical_smcpp_sawtooth(
+    rng: np.random.Generator,
+    cfg: Config,
+    edges: np.ndarray,
+    mids: np.ndarray,
+) -> SamplerResult:
+    # Exact scrm command from Terhorst, Kamm & Song (2017) Online Methods,
+    # doi:10.1038/ng.3748. This differs slightly from Zigzag_1S14 and is kept
+    # as a separate provenance-preserving benchmark anchor.
+    nref = 14_312.0
+    breaks = [
+        33.333334976,
+        133.3334544,
+        533.50498912,
+        2_133.3352704,
+        8_533.329632,
+        34_133.318528,
+    ]
+    values = [
+        5.0 * nref,
+        5.0 * nref,
+        0.500002043581 * nref,
+        5.00496081234 * nref,
+        0.500618264601 * nref,
+        5.0061592508 * nref,
+        0.500615510407 * nref,
+    ]
+    scrm_scaled_growth_rates = [1_318.18, -329.546, 82.3865, -20.5966, 5.14916]
+    growth_rates = [
+        0.0,
+        *(float(rate / (4.0 * nref)) for rate in scrm_scaled_growth_rates),
+        0.0,
+    ]
+    return breaks, values, {
+        "classic_demography_model": True,
+        "literature_demography_anchor": True,
+        "literature_model_id": "Terhorst2017_sawtooth",
+        "literature_reference": "Terhorst_Kamm_and_Song_2017",
+        "demography_function": "piecewise_exponential_linear_time",
+        "native_continuous_growth": True,
+        "demography_growth_rates": growth_rates,
+        "dense_type": "canonical_smcpp_sawtooth",
+        "knot_count": int(len(values)),
+        "sawtooth_cycles": 2.5,
+        "sawtooth_exponential_segment_count": 5,
+        "sawtooth_internal_extrema_count": 4,
+        "sawtooth_randomized": False,
+        "has_recent_event": True,
+        "has_ancient_event": False,
+        "event_severity": float(min(values) / max(values)),
+    }
+
+
+def _classic_sawtooth(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
+    # Literature-shaped training family: preserve the dimensionless
+    # Zigzag_1S14 trajectory while randomizing its time, Ne scale, and log-Ne
+    # contrast. The two fixed canonical versions remain separate samplers.
+    base_breaks, base_values, base_meta = _canonical_zigzag_1s14(rng, cfg, edges, mids)
+    time_scale = loguniform(rng, 0.55, 1.80)
+    size_scale = loguniform(rng, 0.55, 1.80)
+    contrast = rng.uniform(0.75, 1.25)
+
+    center = float(np.sqrt(min(base_values) * max(base_values)))
+    breaks = [float(t * time_scale) for t in base_breaks]
+    values = [
+        float(size_scale * center * (float(value) / center) ** contrast)
+        for value in base_values
+    ]
+    growth_rates = [
+        float(rate * contrast / time_scale)
+        for rate in base_meta["demography_growth_rates"]
+    ]
+    return breaks, values, {
+        "classic_demography_model": True,
+        "literature_shaped_family": True,
+        "source_literature_model_id": "Zigzag_1S14",
+        "demography_function": "piecewise_exponential_linear_time",
+        "native_continuous_growth": True,
+        "demography_growth_rates": growth_rates,
+        "dense_type": "classic_sawtooth",
+        "knot_count": int(len(values)),
+        "sawtooth_cycles": 2.5,
+        "sawtooth_exponential_segment_count": 5,
+        "sawtooth_internal_extrema_count": 4,
+        "sawtooth_randomized": True,
+        "sawtooth_time_scale": float(time_scale),
+        "sawtooth_size_scale": float(size_scale),
+        "sawtooth_log_ne_contrast": float(contrast),
+        "has_recent_event": True,
+        "has_ancient_event": False,
+        "event_severity": float(min(values) / max(values)),
     }
 
 
@@ -547,16 +903,21 @@ def _founder_recovery_extreme(rng: np.random.Generator, cfg: Config, edges: np.n
 
 def _continuous_exponential_growth(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
     start = loguniform(rng, 100, 30_000)
-    factor = loguniform(rng, 2.0, 100.0)
+    sampled_factor = loguniform(rng, 2.0, 100.0)
     older_ne = loguniform(rng, 2_000, 80_000)
-    present_ne = min(1_000_000.0, older_ne * factor)
-    breaks, values = _piecewise_exponential(present_ne, older_ne, start, cfg)
-    mode = "rapid_recent_growth" if start <= 5_000 and factor >= 10 else "mild_growth"
+    present_ne = min(1_000_000.0, older_ne * sampled_factor)
+    realized_factor = present_ne / older_ne
+    breaks, values, growth_rates = _native_exponential_transition(present_ne, older_ne, start)
+    mode = "rapid_recent_growth" if start <= 5_000 and realized_factor >= 10 else "mild_growth"
     return breaks, values, {
         "growth_start": float(start),
-        "growth_factor": float(factor),
+        "growth_factor": float(realized_factor),
+        "sampled_growth_factor": float(sampled_factor),
+        "growth_rate_per_generation": float(growth_rates[0]),
         "growth_mode": mode,
-        "continuous_approximation": "piecewise_exponential",
+        "demography_function": "exponential_linear_time",
+        "native_continuous_growth": True,
+        "demography_growth_rates": growth_rates,
         "has_recent_event": bool(start <= 5_000),
         "event_time": float(start),
         "event_severity": float(min(present_ne, older_ne) / max(present_ne, older_ne)),
@@ -565,18 +926,23 @@ def _continuous_exponential_growth(rng: np.random.Generator, cfg: Config, edges:
 
 def _rapid_recent_growth_extreme(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
     start = loguniform(rng, 50, 8_000)
-    factor = loguniform(rng, 20.0, 250.0)
+    sampled_factor = loguniform(rng, 20.0, 250.0)
     older_ne = loguniform(rng, 500, 20_000)
-    present_ne = min(STRESS_NE_CAP, older_ne * factor)
-    breaks, values = _piecewise_exponential(present_ne, older_ne, start, cfg, n_steps=28)
+    present_ne = min(STRESS_NE_CAP, older_ne * sampled_factor)
+    realized_factor = present_ne / older_ne
+    breaks, values, growth_rates = _native_exponential_transition(present_ne, older_ne, start)
     return breaks, values, {
         "stress_scenario": True,
         "stress_type": "rapid_recent_growth_extreme",
         "stress_ne_cap": float(STRESS_NE_CAP),
         "growth_start": float(start),
-        "growth_factor": float(factor),
+        "growth_factor": float(realized_factor),
+        "sampled_growth_factor": float(sampled_factor),
+        "growth_rate_per_generation": float(growth_rates[0]),
         "growth_mode": "extreme_rapid_recent_growth",
-        "continuous_approximation": "piecewise_exponential",
+        "demography_function": "exponential_linear_time",
+        "native_continuous_growth": True,
+        "demography_growth_rates": growth_rates,
         "has_recent_event": True,
         "event_time": float(start),
         "event_severity": float(min(present_ne, older_ne) / max(present_ne, older_ne)),
@@ -585,14 +951,19 @@ def _rapid_recent_growth_extreme(rng: np.random.Generator, cfg: Config, edges: n
 
 def _continuous_exponential_decline(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
     start = loguniform(rng, 100, 30_000)
-    factor = loguniform(rng, 2.0, 50.0)
+    sampled_factor = loguniform(rng, 2.0, 50.0)
     older_ne = loguniform(rng, 20_000, 300_000)
-    present_ne = max(200.0, older_ne / factor)
-    breaks, values = _piecewise_exponential(present_ne, older_ne, start, cfg)
+    present_ne = max(200.0, older_ne / sampled_factor)
+    realized_factor = older_ne / present_ne
+    breaks, values, growth_rates = _native_exponential_transition(present_ne, older_ne, start)
     return breaks, values, {
         "decline_start": float(start),
-        "decline_factor": float(factor),
-        "continuous_approximation": "piecewise_exponential",
+        "decline_factor": float(realized_factor),
+        "sampled_decline_factor": float(sampled_factor),
+        "growth_rate_per_generation": float(growth_rates[0]),
+        "demography_function": "exponential_linear_time",
+        "native_continuous_growth": True,
+        "demography_growth_rates": growth_rates,
         "has_recent_event": bool(start <= 5_000),
         "event_time": float(start),
         "event_severity": float(min(present_ne, older_ne) / max(present_ne, older_ne)),
@@ -811,16 +1182,21 @@ def _ultra_stress(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids
 
     if mode == "ultra_rapid_recent_growth":
         start = loguniform(rng, 50, 8_000)
-        factor = loguniform(rng, 40.0, 500.0)
+        sampled_factor = loguniform(rng, 40.0, 500.0)
         older_ne = loguniform(rng, 500, 20_000)
-        present_ne = min(cap, older_ne * factor)
-        breaks, values = _piecewise_exponential(present_ne, older_ne, start, cfg, n_steps=28)
+        present_ne = min(cap, older_ne * sampled_factor)
+        realized_factor = present_ne / older_ne
+        breaks, values, growth_rates = _native_exponential_transition(present_ne, older_ne, start)
         return breaks, values, {
             **common,
             "growth_start": float(start),
-            "growth_factor": float(factor),
+            "growth_factor": float(realized_factor),
+            "sampled_growth_factor": float(sampled_factor),
+            "growth_rate_per_generation": float(growth_rates[0]),
             "growth_mode": mode,
-            "continuous_approximation": "piecewise_exponential",
+            "demography_function": "exponential_linear_time",
+            "native_continuous_growth": True,
+            "demography_growth_rates": growth_rates,
             "has_recent_event": True,
             "event_time": float(start),
             "event_severity": float(min(present_ne, older_ne) / max(present_ne, older_ne)),
@@ -883,20 +1259,47 @@ def _ultra_stress(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids
 
 def _oscillating(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray, strong: bool) -> SamplerResult:
     t_max = float(edges[-1])
-    k = int(rng.integers(8, 15) if strong else rng.integers(10, 19))
-    breaks = sorted(list(np.exp(rng.uniform(np.log(200), np.log(t_max * 0.8), size=k))))
-    n = loguniform(rng, 3_000, 120_000)
-    values = [n]
-    sign = 1
+    n_turns = int(rng.integers(8, 15) if strong else rng.integers(10, 19))
+    base_times = np.geomspace(max(100.0, cfg.min_time), t_max * 0.8, n_turns)
+    jitter = rng.lognormal(0.0, 0.12, size=n_turns)
+    breaks = np.maximum.accumulate(base_times * jitter)
+    breaks = np.clip(breaks, max(50.0, cfg.min_time), t_max * 0.9)
+    # Clipping can collapse the oldest knots; keep only genuinely distinct
+    # turning times so every reported cycle is scientifically meaningful.
+    breaks = np.unique(breaks).astype(np.float64).tolist()
+
+    present_ne = loguniform(rng, 3_000, 120_000)
+    boundary_values = [present_ne]
+    direction = 1 if rng.random() < 0.5 else -1
     lo, hi = (2.0, 8.0) if strong else (1.2, 2.5)
-    for _ in breaks:
+    for _ in range(1, len(breaks)):
         factor = loguniform(rng, lo, hi)
-        n = n * factor if sign > 0 else n / factor
-        n = float(np.clip(n, 200, 500_000))
-        values.append(n)
-        sign *= -1
+        candidate = boundary_values[-1] * factor if direction > 0 else boundary_values[-1] / factor
+        next_ne = float(np.clip(candidate, 200.0, 500_000.0))
+        # If a bound would flatten the intended turn, reverse it instead.
+        if np.isclose(next_ne, boundary_values[-1], rtol=1e-12, atol=1e-9):
+            candidate = boundary_values[-1] / factor if direction > 0 else boundary_values[-1] * factor
+            next_ne = float(np.clip(candidate, 200.0, 500_000.0))
+        direction = -1 if next_ne > boundary_values[-1] else 1
+        boundary_values.append(next_ne)
+
+    values = [present_ne, *boundary_values]
+    growth_rates = [0.0]
+    for left_t, right_t, left_ne, right_ne in zip(
+        breaks[:-1],
+        breaks[1:],
+        boundary_values[:-1],
+        boundary_values[1:],
+    ):
+        growth_rates.append(float(np.log(left_ne / right_ne) / (right_t - left_t)))
+    growth_rates.append(0.0)
     return breaks, values, {
         "oscillation_strength": "strong" if strong else "mild",
+        "demography_function": "piecewise_exponential_linear_time",
+        "native_continuous_growth": True,
+        "demography_growth_rates": growth_rates,
+        "zigzag_rate_change_count": int(len(breaks)),
+        "zigzag_internal_extrema_count": int(max(0, len(breaks) - 2)),
         "knot_count": int(len(values)),
         "event_severity": float(min(values) / max(values)),
     }
@@ -911,22 +1314,12 @@ def _zigzag_strong(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mid
 
 
 def _zigzag_legacy(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
-    t_max = float(edges[-1])
-    k = int(rng.integers(4, 8))
-    breaks = sorted(list(np.exp(rng.uniform(np.log(200), np.log(t_max * 0.8), size=k))))
-    n = loguniform(rng, 3_000, 120_000)
-    values = [n]
-    sign = 1
-    for _ in breaks:
-        factor = loguniform(rng, 1.5, 7.0)
-        n = n * factor if sign > 0 else n / factor
-        n = float(np.clip(n, 200, 500_000))
-        values.append(n)
-        sign *= -1
+    breaks, values, meta = _oscillating(rng, cfg, edges, mids, strong=True)
     return breaks, values, {
-        "legacy_demography_model": True,
-        "oscillation_strength": "legacy_zigzag",
-        "event_severity": float(min(values) / max(values)),
+        **meta,
+        "legacy_demography_model": False,
+        "legacy_sampler_alias": True,
+        "oscillation_strength": "strong",
     }
 
 
@@ -954,6 +1347,8 @@ DEMO_SAMPLERS: dict[str, DemoSampler] = {
     "dense_multiscale_random_walk": _dense_multiscale_random_walk,
     "dense_recent_wiggle": _dense_recent_wiggle,
     "classic_sawtooth": _classic_sawtooth,
+    "canonical_zigzag_1s14": _canonical_zigzag_1s14,
+    "canonical_smcpp_sawtooth": _canonical_smcpp_sawtooth,
     "empirical_human_ne_template": _empirical_human_ne_template,
     "smooth_random_walk_stress": _smooth_random_walk_stress,
     "dense_random_walk_stress": _dense_random_walk_stress,
@@ -980,7 +1375,7 @@ DEMO_SAMPLERS: dict[str, DemoSampler] = {
 }
 
 
-def choose_demo_type(rng: np.random.Generator, cfg: Config) -> str:
+def choose_generator_recipe(rng: np.random.Generator, cfg: Config) -> str:
     choices: list[str] = []
     probs: list[float] = []
     for demo_type, field in DEMO_PROB_FIELDS:
@@ -996,26 +1391,48 @@ def choose_demo_type(rng: np.random.Generator, cfg: Config) -> str:
     return str(rng.choice(choices, p=p / p.sum()))
 
 
+def choose_demo_type(rng: np.random.Generator, cfg: Config) -> str:
+    """Compatibility alias for the pre-v3 recipe-selection API."""
+    return choose_generator_recipe(rng, cfg)
+
+
 def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msprime.Demography, np.ndarray, dict]:
     edges, mids = time_grid(cfg)
-    t_max = float(edges[-1])
-    demo_type = choose_demo_type(rng, cfg)
-    sampler = DEMO_SAMPLERS.get(demo_type)
+    generator_recipe = choose_generator_recipe(rng, cfg)
+    sampler = DEMO_SAMPLERS.get(generator_recipe)
     if sampler is None:
-        raise ValueError(f"Unknown demography sampler: {demo_type}")
+        raise ValueError(f"Unknown demography sampler: {generator_recipe}")
 
     breaks, values, meta = sampler(rng, cfg, edges, mids)
-    breaks, values = _clean_breaks_values(breaks, values, t_max)
-    y = bin_average_log10_ne(edges, breaks, values)
+    breaks, values, growth_rates = _clean_demography(
+        breaks,
+        values,
+        meta.get("demography_growth_rates"),
+    )
+    y = bin_average_log10_ne(edges, breaks, values, growth_rates)
+    demography_type = resolve_demography_type(generator_recipe, values, meta)
     meta = {
         **meta,
-        **_summary(edges, breaks, values, meta),
-        "scenario": demo_type,
-        "demography_type": demo_type,
+        **summarize_demography(
+            edges,
+            breaks,
+            values,
+            growth_rates,
+            meta,
+            generator_recipe=generator_recipe,
+            demography_type=demography_type,
+        ),
+        "scenario": generator_recipe,
+        "generator_recipe": generator_recipe,
+        "generator_recipe_id": GENERATOR_RECIPE_IDS[generator_recipe],
+        "demography_id": GENERATOR_RECIPE_IDS[generator_recipe],
+        "demography_type": demography_type,
+        "demography_type_id": DEMOGRAPHY_TYPE_IDS[demography_type],
         "demography_mixture_version": cfg.demography_mixture_version,
         "demography_breaks": [float(x) for x in breaks],
         "demography_values": [float(x) for x in values],
+        "demography_growth_rates": [float(x) for x in growth_rates],
         "target_scale": "log10_Ne",
         "target_aggregation": "log_time_bin_average",
     }
-    return build_demography(breaks, values), y, meta
+    return build_demography(breaks, values, growth_rates), y, meta

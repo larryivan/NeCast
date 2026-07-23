@@ -5,8 +5,15 @@ import atexit
 import msprime
 import numpy as np
 
-from .config import Config, DEMO_IDS, SOURCE_IDS, validate_config
+from .config import (
+    DEMOGRAPHY_TYPE_IDS,
+    GENERATOR_RECIPE_IDS,
+    SOURCE_IDS,
+    Config,
+    validate_config,
+)
 from .demography import sample_custom_demography
+from .dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
 from .empirical_maps import EmpiricalMapStore
 from .maps import choose_source, constant_map, make_rate_map, sample_maps_for_source
 from .noise import apply_genotype_noise, pack_haplotypes
@@ -219,9 +226,33 @@ def simulate_one(task: tuple) -> dict:
         **_rate_summary("obs_rec", obs_rec_rate),
         **_rate_summary("obs_mut", obs_mut_rate),
     }
+    demography_type = str(meta.get("demography_type", "stdpopsim"))
+    generator_recipe = str(meta.get("generator_recipe", meta.get("scenario", "stdpopsim")))
+    try:
+        demography_type_id = int(DEMOGRAPHY_TYPE_IDS[demography_type])
+    except KeyError as exc:
+        raise ValueError(f"Unknown public demography type: {demography_type!r}") from exc
+    try:
+        generator_recipe_id = int(GENERATOR_RECIPE_IDS[generator_recipe])
+    except KeyError as exc:
+        raise ValueError(f"Unknown demography generator recipe: {generator_recipe!r}") from exc
+    # Keep the schema-v1/v2 numeric namespace stable for existing consumers.
+    demography_id = generator_recipe_id
+    meta["demography_id"] = demography_id
+    meta["demography_type_id"] = demography_type_id
+    meta["generator_recipe"] = generator_recipe
+    meta["generator_recipe_id"] = generator_recipe_id
+    meta["generator_schema_version"] = SAMPLE_GENERATOR_SCHEMA_VERSION
     meta["scenario_key"] = "|".join(
         [
-            str(meta.get("demography_type", "unknown")),
+            demography_type,
+            str(meta.get("map_mode", meta.get("map_type", "unknown"))),
+            str(meta.get("noise_profile", "unknown")),
+        ]
+    )
+    meta["generator_recipe_key"] = "|".join(
+        [
+            generator_recipe,
             str(meta.get("map_mode", meta.get("map_type", "unknown"))),
             str(meta.get("noise_profile", "unknown")),
         ]
@@ -230,7 +261,11 @@ def simulate_one(task: tuple) -> dict:
     out = {
         "sample_id": sample_id,
         "source_id": SOURCE_IDS.get(source, -1),
-        "demo_id": DEMO_IDS.get(meta.get("demography_type", "stdpopsim"), 9),
+        # ``demo_id`` is retained as an in-process compatibility alias.
+        "demo_id": demography_id,
+        "demography_id": demography_id,
+        "demography_type_id": demography_type_id,
+        "generator_recipe_id": generator_recipe_id,
         "positions": positions_u32,
         "geno_packed": packed,
         "missing_flat_idx": missing_flat_idx,

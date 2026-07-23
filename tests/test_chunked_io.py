@@ -1,13 +1,27 @@
 from __future__ import annotations
 
 import dataclasses
+import csv
 import gzip
+import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 import numpy as np
 
-from simulator.config import Config, DEMOGRAPHY_PROB_FIELDS, validate_config
+from scripts.dataset_admin import check_shard
+from simulator.config import (
+    DEMOGRAPHY_PROB_FIELDS,
+    DEMOGRAPHY_TYPE_IDS,
+    DEMO_IDS,
+    GENERATOR_RECIPE_IDS,
+    Config,
+    validate_config,
+)
+from simulator.dataset_files import write_dataset_files
+from simulator.dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
 from simulator.empirical_maps import EmpiricalMapStore
 from simulator.shards import _write_npz_arrays, generate_dataset
 
@@ -156,6 +170,8 @@ def test_compute_chunks_and_worker_count_are_lossless(tmp_path: Path) -> None:
     )
 
     assert baseline["shards"] == chunked["shards"] == parallel["shards"]
+    assert baseline["demography_counts"] == {"constant": 4}
+    assert baseline["generator_recipe_counts"] == {"constant": 4}
     _assert_logical_outputs_equal(baseline_dir, chunked_dir)
     _assert_logical_outputs_equal(chunked_dir, parallel_dir)
     assert not (baseline_dir / "samples" / ".fragments").exists()
@@ -163,9 +179,78 @@ def test_compute_chunks_and_worker_count_are_lossless(tmp_path: Path) -> None:
     assert not (parallel_dir / "samples" / ".fragments").exists()
 
     for dataset in (baseline_dir, chunked_dir, parallel_dir):
+        for shard_path in sorted((dataset / "samples").glob("shard_*.npz")):
+            assert len(check_shard(shard_path)) == 2
+            with np.load(shard_path, allow_pickle=False) as data:
+                assert data["demography_id"].dtype == np.int16
+                assert data["demography_type_id"].dtype == np.int16
+                assert data["generator_recipe_id"].dtype == np.int16
+                np.testing.assert_array_equal(
+                    data["generator_schema_version"],
+                    np.array([SAMPLE_GENERATOR_SCHEMA_VERSION], dtype=np.int16),
+                )
+                np.testing.assert_array_equal(
+                    data["demography_id"],
+                    np.full(
+                        len(data["sample_id"]),
+                        GENERATOR_RECIPE_IDS["constant"],
+                    ),
+                )
+                np.testing.assert_array_equal(
+                    data["demography_type_id"],
+                    np.full(
+                        len(data["sample_id"]),
+                        DEMOGRAPHY_TYPE_IDS["constant"],
+                    ),
+                )
+                np.testing.assert_array_equal(
+                    data["generator_recipe_id"],
+                    np.full(
+                        len(data["sample_id"]),
+                        GENERATOR_RECIPE_IDS["constant"],
+                    ),
+                )
         with gzip.open(dataset / "metadata" / "samples.jsonl.gz", "rb") as handle:
             aggregate = handle.read()
         assert aggregate == _sidecar_bytes(dataset)
+        with (dataset / "metadata" / "samples.csv").open(
+            newline="",
+            encoding="utf-8",
+        ) as handle:
+            rows = list(csv.DictReader(handle))
+        assert {row["demography_type"] for row in rows} == {"constant"}
+        assert {row["generator_recipe"] for row in rows} == {"constant"}
+        assert {int(row["demography_id"]) for row in rows} == {
+            GENERATOR_RECIPE_IDS["constant"]
+        }
+        assert {int(row["demography_type_id"]) for row in rows} == {
+            DEMOGRAPHY_TYPE_IDS["constant"]
+        }
+        assert {int(row["generator_recipe_id"]) for row in rows} == {
+            GENERATOR_RECIPE_IDS["constant"]
+        }
+        assert all("log10_ne_range" in row for row in rows)
+
+    baseline_cfg = _config(baseline_dir, workers=1, compute_chunk_size=2)
+    write_dataset_files(baseline_cfg, baseline)
+    config_json = json.loads((baseline_dir / "config.json").read_text(encoding="utf-8"))
+    manifest_json = json.loads((baseline_dir / "manifest.json").read_text(encoding="utf-8"))
+    for payload in (config_json, manifest_json):
+        assert payload["demography_ids"] == DEMO_IDS
+        assert payload["demography_type_ids"] == DEMOGRAPHY_TYPE_IDS
+        assert payload["generator_recipe_ids"] == GENERATOR_RECIPE_IDS
+        assert (
+            payload["generator_schema_version"]
+            == SAMPLE_GENERATOR_SCHEMA_VERSION
+        )
+    subprocess.run(
+        [
+            sys.executable,
+            str(baseline_dir / "scripts" / "validate_dataset.py"),
+            str(baseline_dir),
+        ],
+        check=True,
+    )
 
 
 def test_fragment_metadata_honors_compression_level(tmp_path: Path) -> None:

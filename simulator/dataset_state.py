@@ -11,7 +11,7 @@ from typing import Any
 FINGERPRINT_VERSION = 1
 # Bump whenever identical Config values would produce meaningfully different
 # samples or shard semantics.
-SAMPLE_GENERATOR_SCHEMA_VERSION = 1
+SAMPLE_GENERATOR_SCHEMA_VERSION = 3
 DONE_CONFIG_STATE_KEY = "sample_generation_config"
 RUNTIME_CONFIG_FIELDS = frozenset(
     {

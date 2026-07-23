@@ -15,7 +15,25 @@ SOURCE_IDS = {
 }
 ID_TO_SOURCE = {v: k for k, v in SOURCE_IDS.items()}
 
-DEMO_IDS = {
+DEMOGRAPHY_TYPE_IDS = {
+    "constant": 0,
+    "random_walk": 1,
+    "bottleneck": 2,
+    "exponential_growth": 3,
+    "exponential_decline": 4,
+    "expansion": 5,
+    "contraction": 6,
+    "three_epoch": 7,
+    "serial_founder": 8,
+    "zigzag": 9,
+    "empirical_human_ne_template": 10,
+    "stdpopsim": 11,
+}
+ID_TO_DEMOGRAPHY_TYPE = {v: k for k, v in DEMOGRAPHY_TYPE_IDS.items()}
+
+# Append-only recipe IDs preserve the exact generator provenance used by older
+# datasets, where these values were stored as ``demography_id``.
+GENERATOR_RECIPE_IDS = {
     "smooth_random_walk": 0,
     "single_bottleneck": 1,
     "recent_bottleneck": 2,
@@ -47,8 +65,80 @@ DEMO_IDS = {
     "classic_sawtooth": 28,
     "empirical_human_ne_template": 29,
     "ultra_stress": 30,
+    "canonical_zigzag_1s14": 31,
+    "canonical_smcpp_sawtooth": 32,
 }
-ID_TO_DEMO = {v: k for k, v in DEMO_IDS.items()}
+ID_TO_GENERATOR_RECIPE = {v: k for k, v in GENERATOR_RECIPE_IDS.items()}
+# Preserve the original API and numeric namespace: ``DEMO_IDS`` and
+# ``demography_id`` remain aliases for the fine-grained generator recipe.
+DEMO_IDS = GENERATOR_RECIPE_IDS
+ID_TO_DEMO = ID_TO_GENERATOR_RECIPE
+
+# ``None`` marks recipes whose public type depends on the sampled trajectory.
+GENERATOR_RECIPE_TO_DEMOGRAPHY_TYPE: dict[str, str | None] = {
+    "constant": "constant",
+    "near_constant": "random_walk",
+    "smooth_random_walk": "random_walk",
+    "dense_random_walk": "random_walk",
+    "dense_multiscale_random_walk": "random_walk",
+    "dense_recent_wiggle": "random_walk",
+    "smooth_random_walk_stress": "random_walk",
+    "dense_random_walk_stress": "random_walk",
+    "single_bottleneck": "bottleneck",
+    "recent_bottleneck": "bottleneck",
+    "recent_bottleneck_extreme": "bottleneck",
+    "recent_founder_recovery": "bottleneck",
+    "founder_recovery_extreme": "bottleneck",
+    "continuous_exponential_growth": "exponential_growth",
+    "rapid_recent_growth_extreme": "exponential_growth",
+    "continuous_exponential_decline": "exponential_decline",
+    "expansion": "expansion",
+    "contraction": "contraction",
+    "three_epoch": "three_epoch",
+    "ancient_recent_compound": "three_epoch",
+    "ancient_recent_conflict": "three_epoch",
+    "serial_founder": "serial_founder",
+    "serial_founder_extreme": "serial_founder",
+    "classic_sawtooth": "zigzag",
+    "canonical_zigzag_1s14": "zigzag",
+    "canonical_smcpp_sawtooth": "zigzag",
+    "oscillating_mild": "zigzag",
+    "zigzag_strong": "zigzag",
+    "zigzag": "zigzag",
+    "empirical_human_ne_template": "empirical_human_ne_template",
+    "stdpopsim": "stdpopsim",
+    "ancient_event": None,
+    "ultra_stress": None,
+}
+
+ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE = {
+    "ultra_random_walk": "random_walk",
+    "ultra_recent_bottleneck": "bottleneck",
+    "ultra_founder_recovery": "bottleneck",
+    "ultra_rapid_recent_growth": "exponential_growth",
+    "ultra_serial_founder": "serial_founder",
+    "ultra_ancient_recent_conflict": "three_epoch",
+}
+
+HISTORY_FAMILY_BY_DEMOGRAPHY_TYPE = {
+    "constant": "stable",
+    "random_walk": "free_form",
+    "bottleneck": "single_pulse",
+    "exponential_growth": "monotonic_change",
+    "exponential_decline": "monotonic_change",
+    "expansion": "monotonic_change",
+    "contraction": "monotonic_change",
+    "three_epoch": "compound_events",
+    "serial_founder": "compound_events",
+    "zigzag": "oscillatory",
+    "empirical_human_ne_template": "free_form",
+    "stdpopsim": "external_model",
+}
+GENERATOR_RECIPE_HISTORY_FAMILY_OVERRIDES = {
+    # Keep the strict ``constant`` public label uncontaminated while still
+    # recognizing the near-constant control as part of the stable family.
+    "near_constant": "stable",
+}
 
 DEFAULT_RECOMB_MAP = "maps/recomb_map/output/palsson_2025_autosomes_hg38.bed"
 DEFAULT_MUT_MAP = "maps/mut_map/output/roulette_2023_autosomes_hg38_1000bp.bed"
@@ -79,6 +169,8 @@ DEMOGRAPHY_PROB_FIELDS = (
     "p_dense_multiscale_random_walk",
     "p_dense_recent_wiggle",
     "p_classic_sawtooth",
+    "p_canonical_zigzag_1s14",
+    "p_canonical_smcpp_sawtooth",
     "p_empirical_human_ne_template",
     "p_smooth_random_walk_stress",
     "p_dense_random_walk_stress",
@@ -120,7 +212,7 @@ class Config:
     out_dir: str = "./DLCoalSim-Out"
     seed: int = 12345
     force: bool = False
-    demography_mixture_version: str = "v0.7-capped-stress-human-ne"
+    demography_mixture_version: str = "v0.9-merged-demography-taxonomy"
 
     n_samples: int = 2000
     shard_size: int = 64
@@ -147,6 +239,8 @@ class Config:
     p_dense_multiscale_random_walk: float = 0.06
     p_dense_recent_wiggle: float = 0.045
     p_classic_sawtooth: float = 0.03
+    p_canonical_zigzag_1s14: float = 0.0
+    p_canonical_smcpp_sawtooth: float = 0.0
     p_empirical_human_ne_template: float = 0.110
     p_smooth_random_walk_stress: float = 0.008
     p_dense_random_walk_stress: float = 0.004

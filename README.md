@@ -104,6 +104,48 @@ unavailable component is the sole source, generation stops. Explicitly enabled
 stdpopsim anchors also fail fast when the optional dependency or requested
 model setup is unavailable.
 
+Single-population continuous-growth scenarios use msprime's native
+linear-time exponential convention, `N(t) = N(0) exp(-g t)`, rather than a
+stepwise approximation. Full epoch growth rates are stored in sample metadata,
+and targets are analytic log-time-bin averages of that same trajectory.
+
+Demographic metadata has two explicit levels. `demography_type` is the compact
+public scientific label (`constant`, `bottleneck`, `exponential_growth`,
+`zigzag`, and so on), while `generator_recipe` preserves the exact
+fine-grained sampler name for reproducibility. Shards store
+`demography_type_id` for the public type and `generator_recipe_id` for the
+recipe; the legacy `demography_id` remains a recipe-ID alias so its old numeric
+namespace never changes. All mappings are embedded in `config.json` and
+`manifest.json`. Shape and difficulty are orthogonal
+metadata (`history_family`, `trajectory_form`, `direction`, `time_regime`,
+`log10_ne_range`, `total_variation_log10`, and `turn_count`) rather than extra
+population-history classes. `event_severity` is consistently defined as
+`min_Ne / max_Ne`; the former recipe-specific value remains available as
+`recipe_event_severity`.
+
+This is generator schema v3. Existing v2 outputs lack the new
+`demography_type_id` and `generator_recipe_id` arrays and must be regenerated
+in a new directory or with an intentional `--force`. Every v3 shard also stores
+its schema version; numeric IDs should always be decoded with that dataset's
+own manifest.
+
+`canonical_zigzag_1s14` and `canonical_smcpp_sawtooth` preserve the two
+slightly different published validation models as fixed anchors. Their default
+mixture weights are zero so a benchmark can enable them explicitly without
+leaking the exact evaluation curves into the default training distribution.
+These flags fix the demographic trajectory only; reproducing an entire paper
+benchmark still requires that benchmark's sequence layout, sample size, rates,
+error model, and replicate protocol.
+`classic_sawtooth` is a scaled, literature-shaped training family, while
+`oscillating_mild` and `zigzag_strong` generate randomized continuous
+exponential expansions and contractions. The legacy `zigzag` configuration key
+is an exact alias of `zigzag_strong`; it remains active at its historical low
+weight so existing seeds continue to select the same recipes.
+The canonical models' first rate change is at 33.33 generations; set
+`--min-time` to 33 or lower when a benchmark must score that most-recent epoch
+(the default target grid starts at 50 generations, although the simulation
+itself still contains the event).
+
 ## Validate output
 
 Every generated dataset includes a standalone validator:

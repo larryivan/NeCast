@@ -4,12 +4,69 @@ from typing import Optional
 
 import numpy as np
 
-from .config import Config
+from .config import (
+    DEMOGRAPHY_TYPE_IDS,
+    GENERATOR_RECIPE_IDS,
+    Config,
+)
+from .demography import summarize_demography
 from .utils import bin_average_log10_ne, time_grid
 
 
 class StdpopsimSimulationError(RuntimeError):
     """Raised when a requested stdpopsim anchor cannot be generated."""
+
+
+def _extract_single_population_trajectory(dem) -> tuple[list[float], list[float], list[float]]:
+    """Extract first-population size and growth-rate epochs from msprime.
+
+    This remains a proxy for structured models, but it exactly preserves native
+    exponential growth for genuinely single-population stdpopsim models.
+    """
+    first_pop = dem.populations[0]
+    pop_name = first_pop.name
+    pop_id = getattr(first_pop, "id", 0)
+    current_size = float(first_pop.initial_size)
+    current_rate = float(first_pop.growth_rate)
+    previous_time = 0.0
+    breaks: list[float] = []
+    values = [current_size]
+    growth_rates = [current_rate]
+
+    events = sorted(getattr(dem, "events", []), key=lambda event: getattr(event, "time", 0))
+    for event in events:
+        if event.__class__.__name__ != "PopulationParametersChange":
+            continue
+        population = getattr(event, "population", None)
+        population_id = getattr(event, "population_id", None)
+        if population is not None:
+            applies = population in {-1, 0, pop_id, pop_name}
+        elif population_id is not None:
+            applies = population_id in {-1, 0, pop_id}
+        else:
+            applies = True
+        if not applies:
+            continue
+
+        event_time = float(event.time)
+        current_size *= float(np.exp(-current_rate * (event_time - previous_time)))
+        if getattr(event, "initial_size", None) is not None:
+            current_size = float(event.initial_size)
+        if getattr(event, "growth_rate", None) is not None:
+            current_rate = float(event.growth_rate)
+
+        if event_time <= 0:
+            values[0] = current_size
+            growth_rates[0] = current_rate
+        elif breaks and np.isclose(event_time, breaks[-1], rtol=0.0, atol=1e-12):
+            values[-1] = current_size
+            growth_rates[-1] = current_rate
+        else:
+            breaks.append(event_time)
+            values.append(current_size)
+            growth_rates.append(current_rate)
+        previous_time = event_time
+    return breaks, values, growth_rates
 
 
 def validate_stdpopsim_setup(cfg: Config) -> None:
@@ -71,36 +128,62 @@ def try_stdpopsim_sample(
         edges, _ = time_grid(cfg)
         breaks: list[float] = []
         values: list[float] = []
+        growth_rates: list[float] = []
         dem = getattr(model, "model", None)
-        if dem is not None:
-            try:
-                first_pop = dem.populations[0]
-                pop_name = first_pop.name
-                values = [float(first_pop.initial_size)]
-                events = sorted(getattr(dem, "events", []), key=lambda e: getattr(e, "time", 0))
-                for ev in events:
-                    if ev.__class__.__name__ == "PopulationParametersChange":
-                        if getattr(ev, "population", None) in {0, pop_name} and getattr(ev, "initial_size", None) is not None:
-                            breaks.append(float(ev.time))
-                            values.append(float(ev.initial_size))
-            except Exception:
-                values = [10_000.0]
+        if dem is None:
+            raise ValueError(
+                f"stdpopsim model {model_id!r} exposes no msprime demography"
+            )
+        breaks, values, growth_rates = _extract_single_population_trajectory(dem)
         if not values:
-            values = [10_000.0]
+            raise ValueError(
+                f"stdpopsim model {model_id!r} has no extractable population trajectory"
+            )
+        if not growth_rates:
+            raise ValueError(
+                f"stdpopsim model {model_id!r} has no extractable growth-rate trajectory"
+            )
 
-        y = bin_average_log10_ne(edges, breaks, values)
-        meta = {
+        y = bin_average_log10_ne(edges, breaks, values, growth_rates)
+        trajectory_meta = {
             "source_type": "stdpopsim_anchor",
+            "target_quality": "heuristic_single_population",
+            "native_continuous_growth": any(
+                float(rate) != 0.0 for rate in growth_rates
+            ),
+        }
+        meta = {
+            **trajectory_meta,
+            **summarize_demography(
+                edges,
+                breaks,
+                values,
+                growth_rates,
+                trajectory_meta,
+                generator_recipe="stdpopsim",
+                demography_type="stdpopsim",
+            ),
             "scenario": "stdpopsim",
+            "generator_recipe": "stdpopsim",
+            "generator_recipe_id": GENERATOR_RECIPE_IDS["stdpopsim"],
+            "demography_id": GENERATOR_RECIPE_IDS["stdpopsim"],
             "demography_type": "stdpopsim",
+            "demography_type_id": DEMOGRAPHY_TYPE_IDS["stdpopsim"],
+            "demography_mixture_version": cfg.demography_mixture_version,
             "stdpopsim_species": cfg.stdpopsim_species,
             "stdpopsim_model_id": model_id,
             "stdpopsim_population": pop_id,
             "stdpopsim_contig_length": int(contig_length),
-            "target_quality": "heuristic_single_population",
+            "target_scale": "log10_Ne",
             "target_aggregation": "log_time_bin_average",
             "demography_breaks": [float(x) for x in breaks],
             "demography_values": [float(x) for x in values],
+            "demography_growth_rates": [float(x) for x in growth_rates],
+            "demography_function": (
+                "piecewise_exponential_linear_time"
+                if any(float(rate) != 0.0 for rate in growth_rates)
+                else "piecewise_constant"
+            ),
         }
         return ts, y, meta, contig
     except Exception as exc:

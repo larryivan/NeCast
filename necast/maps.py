@@ -10,7 +10,7 @@ import math
 
 import numpy as np
 
-from necast.window import open_text, plain_name
+from necast.window import collapse, open_text, plain_name
 
 RATE_RANGE = (1e-13, 1e-5)           # recombination per bp: the range of the training maps
 SPIKE_WIDTH = (1_000, 1_000_000)     # bp over which a removed stretch's recombination is spread
@@ -137,11 +137,8 @@ def _collapse(breaks, rates, intervals):
     piece starts at each interval start and at each break inside an interval."""
     breaks, rates = _extend(breaks, rates, intervals[0, 0], intervals[-1, 1])
     starts, ends = intervals[:, 0], intervals[:, 1]
-    offsets = np.append(0, np.cumsum(ends - starts)[:-1])
     j = np.searchsorted(starts, breaks, side="right") - 1
     inside = (j >= 0) & (breaks > starts[np.maximum(j, 0)]) & (breaks < ends[np.maximum(j, 0)])
     physical = np.sort(np.concatenate((starts.astype(np.float64), breaks[inside])))
-    k = np.searchsorted(starts, physical, side="right") - 1
-    collapsed = physical - starts[k] + offsets[k]
     piece_rates = rates[np.clip(np.searchsorted(breaks, physical, side="right") - 1, 0, len(rates) - 1)]
-    return np.append(collapsed, float(np.sum(ends - starts))), piece_rates
+    return np.append(collapse(physical, intervals), float(np.sum(ends - starts))), piece_rates

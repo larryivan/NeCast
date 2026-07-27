@@ -115,7 +115,7 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
         check_grch38(vcf, names, {name: int(g[-1, 1]) for name, g in gaps.items()})
         accessible = {name: window.subtract(accessible[name], gaps[name]) for name in names}
     rec = read_map(rec_map, names, "recombination", scale=1e-8) if rec_map else None
-    if rec and np.mean([np.sum(np.diff(b) * r) / (b[-1] - b[0]) for b, r in (rec[n] for n in names)]) < 1e-11:
+    if rec and np.mean([mean_rate(rec[name]) for name in names]) < 1e-11:
         raise InputError(f"the rates in {rec_map} are below 0.001 cM/Mb on average; the map should be in cM/Mb "
                          "(the human average is about 1.3). If it is per bp per generation, multiply it by 1e8.")
     mut = read_map(mut_map, names, "mutation") if mut_map else None
@@ -247,11 +247,16 @@ def pick_chromosomes(vcf, mask, requested, autosomes=None):
 
 def check_map(rec_map, log):
     """Warn when a window's recombination rate is outside the range of the training windows."""
-    rate = float(np.sum(np.diff(rec_map[0]) * rec_map[1])) / window.WINDOW_BP
+    rate = mean_rate(rec_map)
     low, high = TRAINED["rec"]
     if not low <= rate <= high:
         log(f"  warning: the mean recombination rate of this window, {rate:.2g} per bp, is outside the "
             f"training range ({low:g} to {high:g})")
+
+
+def mean_rate(rate_map):
+    breaks, rates = rate_map
+    return float(np.sum(np.diff(breaks) * rates) / (breaks[-1] - breaks[0]))
 
 
 def check_calls(states, label, log):

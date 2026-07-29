@@ -46,7 +46,7 @@ def summarise(positions, states, rec_map, mut_map, length, threads=1):
     r, rec_values = relative_map(*rec_map, length, "%.2f", floor=0.02)
     size = theta / (4 * mu)                       # the constant size of the first pass
     maps = Maps(binned(mut_values, length, bin_bp),
-                binned(rec_values, length, bin_bp, decimate=True), bin_bp, theta)
+                binned(rec_values, length, bin_bp, truncate=True), bin_bp, theta)
 
     sequences = []
     for i in range(states.shape[1]):
@@ -87,26 +87,27 @@ class Maps:
         self.theta = theta
 
 
-def relative_map(breaks, rates, length, decimals, floor=0.0):
+def relative_map(breaks, rates, length, text_format, floor=0.0):
     """Mean rate of a map, and its rate relative to that mean per base.
 
-    The relative rates are rounded as PSMC+ reads them from a text file."""
+    The relative rates are rounded as PSMC+ reads them from a text file
+    written with `text_format`, such as '%.3f'."""
     ends = np.rint(breaks[1:]).astype(np.int64)
     ends[-1] = length
     starts = np.concatenate(([0], ends[:-1]))
     keep = ends > starts
     starts, ends, rates = starts[keep], ends[keep], np.asarray(rates, float)[keep]
     mean = float(np.sum(rates * (ends - starts)) / np.sum(ends - starts))
-    relative = np.array([float(decimals % max(x, floor)) for x in rates / mean])
+    relative = np.array([float(text_format % max(x, floor)) for x in rates / mean])
     return mean, np.repeat(relative, ends - starts)
 
 
-def binned(per_base, length, bin_bp, decimate=False):
+def binned(per_base, length, bin_bp, truncate=False):
     """Mean of a per-base map over consecutive bins; PSMC+ truncates the
     recombination map to two decimals and sets zeros to 1e-5."""
     n = length // bin_bp
     means = per_base[: n * bin_bp].reshape(n, bin_bp).mean(1)
-    if decimate:
+    if truncate:
         means = np.floor(means * 100) / 100
         means[means == 0] = 1e-5
     return means

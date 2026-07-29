@@ -190,8 +190,11 @@ def _ld_sums(states, morgans, edges, lags, block=65536):
 def identity_by_state(positions, states, length, threads=1):
     """Tract-length spectra over all pairs of individuals.
 
-    Kinds 0-3: stretches between sites where two individuals share no allele
-    (IBS0), complete or cut by the window end, by a missing call, or by both.
+    Kinds 0-3 are stretches cut at sites where two individuals share no
+    allele (IBS0), at missing calls and at the window ends: from one IBS0 site
+    to the next (0), between an IBS0 site and a window end (1), between an
+    IBS0 site and a missing call (2), and stretches with called sites but no
+    IBS0 site, between window ends or missing calls (3).
     Kinds 4-6: runs of sites with IBS0, IBS1 and IBS2. Each tract is counted
     in the region holding its midpoint, at all five region sizes."""
     n = states.shape[1]

@@ -7,7 +7,7 @@ https://huggingface.co/datasets/Larrivhan/NeCast-benchmark:
     windows/b/EMP_CEU/samples/fragments/fragment_00000000.npz    sha256 38bf1c3c...
     estimates/necast/b/EMP_CEU/final/predictions.npz              sha256 212894f1...
 
-    python scripts/make_example.py fragment_00000000.npz predictions.npz
+    python scripts/make_example.py windows/b/EMP_CEU predictions.npz
 
 writes necast/example/ (a VCF, a mask, two maps and the true history, as a user
 would have them) and tests/data/benchmark_window.npz (the window's arrays as
@@ -20,9 +20,9 @@ from pathlib import Path
 
 import numpy as np
 
-from necast.train import individuals, six_states
+from necast.train import read_simulations
+from necast.window import WINDOW_BP
 
-ROW = 0
 CHROMOSOME = "1"
 GENOTYPES = np.array(["0/0", "0/1", "1/1", "0/.", "1/.", "./."])
 
@@ -55,42 +55,30 @@ def write_vcf(path, positions, chosen, length):
     subprocess.run(["tabix", "-f", "-p", "vcf", f"{path}.gz"], check=True)
 
 
-def main(fragment, predictions):
-    z = np.load(fragment)
-    k = ROW
-    v0, v1 = z["variant_offsets"][k: k + 2]
-    m0, m1 = z["missing_offsets"][k: k + 2]
-    r0, r1 = z["obs_rec_offsets"][k: k + 2]
-    u0, u1 = z["obs_mut_offsets"][k: k + 2]
-    length = int(z["sequence_length"][k])
-    window_id = str(z["sample_id"][k])
-    positions = z["variant_positions_bp"][v0:v1]
-    chosen = six_states(z["genotype_packed"][v0:v1], z["missing_flat_idx"][m0:m1].astype(np.int64),
-                        int(z["n_haplotypes"][0]))[:, individuals(window_id, 64)]
-    rec = z["obs_rec_pos"][r0:r1], z["obs_rec_rate"][r0 - k: r1 - k - 1]
-    mut = z["obs_mut_pos"][u0:u1], z["obs_mut_rate"][u0 - k: u1 - k - 1]
+def main(simulations, predictions):
+    name, w, target = next(read_simulations(simulations))      # the first window of the first fragment
     published = np.load(predictions)
-    assert published["row_index"][0] == k and length == 30_000_000
+    assert published["row_index"][0] == 0
 
     out = Path("necast/example")
     out.mkdir(parents=True, exist_ok=True)
-    write_vcf(out / "example.vcf", positions, chosen, length)
-    (out / "mask.bed").write_text(f"{CHROMOSOME}\t0\t{length}\n")
-    write_bed(out / "recombination.bed", rec[0], rec[1] * 1e8)              # cM/Mb
-    write_bed(out / "mutation.bed", *mut)                                    # per bp
-    for name in ("recombination.bed", "mutation.bed"):
-        subprocess.run(["gzip", "-n", "-f", str(out / name)], check=True)
+    write_vcf(out / "example.vcf", w.positions, w.states, WINDOW_BP)
+    (out / "mask.bed").write_text(f"{CHROMOSOME}\t0\t{WINDOW_BP}\n")
+    write_bed(out / "recombination.bed", w.rec_map[0], w.rec_map[1] * 1e8)  # cM/Mb
+    write_bed(out / "mutation.bed", *w.mut_map)                              # per bp
+    for file in ("recombination.bed", "mutation.bed"):
+        subprocess.run(["gzip", "-n", "-f", str(out / file)], check=True)
     with open(out / "truth.tsv", "w") as f:
         f.write("interval\tne\n")
-        for i, value in enumerate(z["target_log10_ne"][k]):
+        for i, value in enumerate(target):
             f.write(f"{i + 1}\t{10 ** float(value):.6g}\n")
 
     Path("tests/data").mkdir(parents=True, exist_ok=True)
-    np.savez_compressed("tests/data/benchmark_window.npz", positions=positions, states=chosen,
-                        rec_breaks=rec[0], rec_rates=rec[1], mut_breaks=mut[0], mut_rates=mut[1],
-                        prediction=published["prediction"][0])
-    mean_mu = float(np.sum(np.diff(mut[0]) * mut[1]) / length)
-    print(f"window {window_id}: {len(positions)} sites, mean mutation rate {mean_mu:.4g}")
+    np.savez_compressed("tests/data/benchmark_window.npz", positions=w.positions, states=w.states,
+                        rec_breaks=w.rec_map[0], rec_rates=w.rec_map[1], mut_breaks=w.mut_map[0],
+                        mut_rates=w.mut_map[1], prediction=published["prediction"][0])
+    mean_mu = float(np.sum(np.diff(w.mut_map[0]) * w.mut_map[1]) / WINDOW_BP)
+    print(f"window {name}: {len(w.positions)} sites, mean mutation rate {mean_mu:.4g}")
 
 
 if __name__ == "__main__":

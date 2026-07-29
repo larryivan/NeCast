@@ -43,11 +43,13 @@ VALIDATION = 500
 def read_simulations(folder):
     """Yield (window name, Window, true log10 Ne) for every window in a folder of `necast simulate`."""
     samples = Path(folder) / "samples"
-    files = sorted(samples.glob("shard_*.npz")) or sorted(samples.glob("*fragments/fragment_*.npz"))
+    # the simulator's file names, which leave out its unfinished <name>.tmp.npz files
+    files = sorted(samples.glob("shard_?????.npz")) or sorted(samples.glob("*fragments/fragment_????????.npz"))
     if not files:
         raise InputError(f"no simulated windows in {samples}; make them with necast simulate")
     for path in files:
-        z = np.load(path)
+        with np.load(path) as f:                      # each array once per file, not once per window
+            z = {key: f[key] for key in f.files}
         rec_rates, mut_rates = (rate_offsets(z[f"obs_{m}_offsets"]) for m in ("rec", "mut"))
         for k, name in enumerate(z["sample_id"]):
             if int(z["sequence_length"][k]) != WINDOW_BP:
@@ -71,7 +73,7 @@ def six_states(packed, missing, n_haplotypes):
     bits = np.unpackbits(packed, axis=1, bitorder="little")[:, :n_haplotypes]
     lost = np.zeros(bits.shape, bool)
     lost.reshape(-1)[missing] = True
-    called = 2 - lost[:, 0::2] - lost[:, 1::2].astype(int)
+    called = 2 - lost[:, 0::2].astype(np.uint8) - lost[:, 1::2]
     derived = (bits[:, 0::2] & ~lost[:, 0::2]) + (bits[:, 1::2] & ~lost[:, 1::2])
     return np.where(called == 1, 3 + derived, np.where(called == 2, derived, 5)).astype(np.uint8)
 
@@ -80,6 +82,7 @@ def individuals(name, n):
     """The 32 of a window's n individuals NeCast reads: a fixed random choice per window."""
     if n < INDIVIDUALS:
         raise InputError(f"window {name} has {n} individuals; NeCast reads {INDIVIDUALS}")
+    # the research code's seed string: it fixes which 32 individuals the published network read
     digest = hashlib.blake2b(f"dlcoalsim-ladder-v1:0:{name}".encode(), digest_size=8).digest()
     return np.random.default_rng(int.from_bytes(digest, "big")).permutation(n)[:INDIVIDUALS]
 

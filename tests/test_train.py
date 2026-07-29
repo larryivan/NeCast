@@ -22,6 +22,7 @@ def test_simulate_and_prepare(tmp_path):
     from necast.cli import main
     main(["simulate", "--preset", "mini", "--seq-len", str(WINDOW_BP), "--n-haplotypes", "64",
           "--n-samples", "1", "--seed", "3", "--out-dir", str(tmp_path / "sim")])
+    (tmp_path / "sim" / "samples" / "shard_00001.tmp.npz").write_bytes(b"left by a stopped run")
     (name, w, target), = train.read_simulations(tmp_path / "sim")
     assert w.states.shape[1] == 32 and len(target) == 64 and w.rec_map[0][-1] == WINDOW_BP
     train.prepare(tmp_path / "sim", tmp_path / "out", threads=4, log=lambda message: None)

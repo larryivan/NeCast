@@ -6,7 +6,7 @@ other histories, other maps, other error rates. The window length (30 Mb) and
 the number of individuals read (32) are fixed.
 
 ```bash
-pip install "necast[simulate]"
+pip install "necast[simulate] @ git+https://github.com/larryivan/NeCast"
 necast simulate --preset full_v01 --n-samples 20000 --out-dir simulations
 necast train simulations --out trained
 necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out results --weights trained/necast.pt
@@ -15,14 +15,21 @@ necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out 
 The windows must be 30 Mb long and hold at least 32 individuals (`full_v01`
 has 64); NeCast reads 32 of them, the same 32 every time.
 
+Simulating is the slow part. The paper's 109,248 windows took about 80,000
+CPU-hours and 570 GB of disk, so 20,000 windows take about 15,000 CPU-hours
+and 100 GB; `--workers` sets how many processes simulate at once.
+
 ## What `necast train` does
 
 **Prepare.** For every window it saves, in `trained/windows/`, the
 genotypes of its 32 individuals at the polymorphic sites, its maps, its
-summaries and its PSMC+ posterior. This is the slow part: a few seconds a
-window with 16 CPU threads, and about 1 MB of disk. A run that stops can be
-started again and skips the windows already done. `--prepare-only` stops
-after this step, so it can run on a machine without a GPU.
+summaries and its PSMC+ posterior: a few seconds a window with 16 CPU
+threads, and on average about 3 MB of disk. A run that stops can be started
+again and skips the windows already done. It knows windows only by name, so
+give each simulation folder its own `--out` folder. `--prepare-only` stops
+after this step, so it can run on a machine without a GPU; training
+afterwards (the same command without `--prepare-only`) reads the simulations
+again, so they must be on that machine too.
 
 **Train.** 500 windows (a tenth, with fewer than 5,000 windows) are kept
 aside to pick the best epoch; the others are fitted. The recipe is the one
@@ -39,9 +46,9 @@ the published network was trained with:
 
 A GPU is used when there is one (`--device` chooses). The published network
 was trained on 89,996 windows for about 50 hours on four RTX 4090 GPUs, which
-shared the windows of each update; `necast train` uses one GPU. A new run does
-not reproduce the published weights exactly, because the random starting
-values depend on the PyTorch version and GPUs round differently.
+shared the windows of each update; `necast train` uses one GPU. A new run gives
+a different network from the published one: it starts from other random
+values and keeps other windows aside.
 
 ## What it writes
 

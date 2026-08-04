@@ -5,7 +5,7 @@ tested on: genotypes of a sample of individuals, the maps a method would be
 given, and the true size history. It needs a few extra packages:
 
 ```bash
-pip install "necast[simulate]"
+pip install "necast[simulate] @ git+https://github.com/larryivan/NeCast"
 ```
 
 ## Quick start
@@ -30,7 +30,7 @@ paper's windows are made with `--preset full_v01`: 30 Mb and 64 individuals.
 | `--out-dir FOLDER` | where to write the windows |
 | `--seed N` | random seed; the same seed gives the same windows on the same kind of machine |
 | `--workers N` | processes to use; -1 means all CPUs but one |
-| `--include-truth` | also store the true maps the data were simulated with (for analysis only, never as input to a method) |
+| `--include-truth` | also store the true maps the data were simulated with, for 2% of the windows (`--truth-fraction` sets the share); for analysis only, never as input to a method |
 | `--force` | delete an earlier dataset in `--out-dir` and start again |
 
 `necast simulate --help` lists every option. A run that stops can be started
@@ -40,7 +40,7 @@ again with the same command: it continues where it stopped.
 
 ```
 simulations/
-  samples/shard_00000.npz        the windows, as arrays, 128 windows a file
+  samples/shard_00000.npz        the windows, as arrays, up to 128 a file (32 with mini)
   samples/shard_00000.jsonl.gz   one line of metadata per window
   metadata/samples.csv           the metadata of all windows in one table
   config.json  manifest.json     the settings that made the dataset
@@ -67,8 +67,8 @@ haplotypes = np.unpackbits(packed, axis=1, bitorder="little")[:, :n_haplotypes]
 The 64 time intervals are spaced evenly on a log scale from 50 to 500,000
 generations; `time_edges` in `manifest.json` gives their boundaries.
 Haplotypes `2i` and `2i + 1` belong to individual `i`. Missing calls are
-listed by position (`missing_flat_idx`, `missing_offsets`) rather than stored
-as a mask.
+stored as indices into the window's flattened sites × haplotypes array
+(`missing_flat_idx`, sliced by `missing_offsets`).
 
 A map is stored as breakpoints (`*_pos`) and the rates between them
 (`*_rate`), so a window has one rate fewer than breakpoints:
@@ -84,9 +84,11 @@ rates       = shard["obs_rec_rate"][rate_at[row]:rate_at[row + 1]]
 
 `obs_rec_*` and `obs_mut_*` are the maps a method would be given in practice:
 a published map's resolution, its errors and an error in its overall level.
-With `--include-truth` the windows also hold `true_rec_*` and `true_mut_*`,
-the maps the sequence was actually simulated under. Use the observed maps as
-input; the true ones are for measuring how much map errors matter.
+With `--include-truth`, a fixed 2% of the windows also hold `true_rec_*` and
+`true_mut_*`, the maps the sequence was actually simulated under; the others
+hold empty arrays, and `--truth-fraction 1` stores them for every window. Use
+the observed maps as input; the true ones are for measuring how much map
+errors matter.
 
 ## What a window can be
 
@@ -97,7 +99,7 @@ history can appear with any map.
 
 | Kind | Share | What it is |
 |---|---|---|
-| `spectral_walk` | 0.200 | a smooth random history; how wiggly and how large its swings are are drawn too |
+| `spectral_walk` | 0.200 | a smooth random history, whose roughness and range are drawn too |
 | `empirical_human_ne_template` | 0.190 | one of 191 histories inferred from real human data (SMC++, phlash, MSMC2, MSMC-IM), shifted, stretched and with noise added |
 | `size_event` | 0.100 | one change of size, which may be permanent |
 | `bottleneck` | 0.100 | a drop of 0.4 to 3 orders of magnitude, then recovery |
@@ -107,10 +109,11 @@ history can appear with any map.
 | `constant` | 0.040 | one size throughout |
 | `exponential` | 0.040 | steady exponential growth or decline |
 | `sawtooth` | 0.030 | repeated rise and fall |
-| `literature_sawtooth` | 0.030 | the "zigzag" history of Schiffels and Durbin |
-| `stdpopsim_single_pop` | 0.024 | the 18 published single-population histories of the stdpopsim catalogue, across 8 species, unchanged |
+| `literature_sawtooth` | 0.030 | zigzags like the one of Schiffels and Durbin: rises and falls of about tenfold, about fourfold apart in time, with a random number of them |
+| `stdpopsim_single_pop` | 0.024 | the 18 published single-population histories of the stdpopsim catalogue, across 8 species; three are multiplied by one constant to keep their sizes within 100 to 1,000,000 |
 
-Sizes range from 100 to 1,000,000.
+Sizes range from 100 to 1,000,000. The kind of each window is in the
+`generator_recipe` column of `metadata/samples.csv`.
 
 ### Maps
 
@@ -119,18 +122,21 @@ Sizes range from 100 to 1,000,000.
 | `custom_heterogeneous` | 0.55 | synthetic: a smoothly varying rate with sharp recombination hotspots, matched to the deCODE map |
 | `empirical_map_slice` | 0.20 | a stretch of the real deCODE and Roulette maps, both taken from the same place in the genome |
 | `random_global_mu_r` | 0.15 | constant rates: recombination 0.3 to 3 times the baseline, mutation 0.5 to 2 times |
-| `clean_constant_map` | 0.10 | constant rates at the baseline, with no error in the observed map |
+| `clean_constant_map` | 0.10 | constant rates at the baseline, with no map error and no sequencing errors |
 
-The observed map differs from the true one by an error that is partly shared
-by neighbouring regions, as real maps disagree with each other.
+These are the shares of `full_v01`; `mini` and `core_v01` use 0.35, 0.20, 0.20
+and 0.25. The kind of each window is in the `source_type` column. For the two
+kinds whose rates vary, the observed map differs from the true one by an error
+that is partly shared by neighbouring regions, as real maps disagree with each
+other; for the two constant kinds it is the true map.
 
 ### Sequencing errors
 
-Windows also carry invented variable sites, wrong genotype calls, missing
-calls and phasing mistakes, each at a rate drawn per window between a minimum
-and a maximum (`--false-variant-rate-per-bp-min/max`,
-`--genotype-error-min/max`, `--missing-rate-min/max`,
-`--phase-switch-rate-per-het-min/max`).
+Windows other than `clean_constant_map` also carry invented variable sites,
+wrong genotype calls, missing calls and phasing mistakes, each at a rate
+drawn per window between a minimum and a maximum
+(`--false-variant-rate-per-bp-min/max`, `--genotype-error-min/max`,
+`--missing-rate-min/max`, `--phase-switch-rate-per-het-min/max`).
 
 ## Simulating a history of your own
 
@@ -154,10 +160,11 @@ necast simulate --preset full_v01 --n-samples 100 --out-dir mine --seed 1 \
   --p-stdpopsim-single-pop 1 --stdpopsim-template-path my_history.csv
 ```
 
-Two things to know: a history whose sizes fall outside 100 to 1,000,000 is
+Three things to know: a history whose sizes fall outside 100 to 1,000,000 is
 multiplied by one constant to fit (each window records the factor as
-`stdpopsim_ne_rescale`), and a table with several models gives each window one
-of them at random.
+`stdpopsim_ne_rescale`); a history whose largest size is more than 10,000
+times its smallest cannot be fitted and stops the run; and a table with
+several models gives each window one of them at random.
 
 ## The data that ships with the package
 

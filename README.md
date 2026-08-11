@@ -85,5 +85,6 @@ data and recombination maps. In preparation.
 
 ## Licence
 
-NeCast's code is under the MIT licence. The third-party code and data in
-`necast/third_party` keep their own licences; see the README there.
+NeCast's code is under the MIT licence. The code and data in
+`necast/third_party` come from other projects and keep their own terms; the
+README there gives the source and terms of each.

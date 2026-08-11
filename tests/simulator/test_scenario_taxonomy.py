@@ -249,7 +249,7 @@ def test_the_literature_anchors_carry_weight() -> None:
 def test_the_frozen_catalogue_matches_the_published_event_table() -> None:
     """The freeze is checked against a source that is not itself.
 
-    ``scripts/build_stdpopsim_single_pop.py`` reads whichever stdpopsim happens
+    ``necast/third_party/histories/build_stdpopsim_single_pop.py`` reads whichever stdpopsim happens
     to be installed at build time, so nothing in the data file proves it is
     right.  ``_canonical_zigzag_1s14`` is the Schiffels & Durbin table typed in
     by hand from the paper, and it has to agree with the frozen entry exactly.

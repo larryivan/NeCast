@@ -18,8 +18,8 @@ from .utils import time_grid
 
 README_TEMPLATE = """# {dataset_name}
 
-DLCoalSim is a minimally processed coalescent simulation dataset for demographic
-history inference from haplotype data.
+A minimally processed coalescent simulation dataset made by `necast simulate`, for
+demographic history inference from haplotype data.
 
 ## Core Philosophy
 
@@ -148,7 +148,7 @@ Start with:
 
 
 FEATURES_PY = r'''
-"""Baseline feature recipes for DLCoalSim."""
+"""Baseline feature recipes for NeCast simulations."""
 import numpy as np
 
 
@@ -185,7 +185,7 @@ def basic_window_stats(positions_bp, G_vh, seq_len, n_windows=512):
 
 
 LOADER_PY = r'''
-"""Tiny loader example for DLCoalSim shards."""
+"""Tiny loader example for NeCast simulation shards."""
 
 # Substituted from ``SAMPLE_GENERATOR_SCHEMA_VERSION`` when this script is
 # written.  See the note in ``validate_dataset.py``.
@@ -198,7 +198,7 @@ import numpy as np
 SUPPORTED_GENERATOR_SCHEMA_VERSION = __GENERATOR_SCHEMA_VERSION__
 
 
-class DLCoalSimShard:
+class Shard:
     def __init__(self, shard_path):
         self.shard_path = Path(shard_path)
         self.data = np.load(self.shard_path, allow_pickle=False)
@@ -286,7 +286,7 @@ class DLCoalSimShard:
 
 
 VIZ_PY = r'''
-"""Reusable visualization helpers for DLCoalSim tutorial notebooks."""
+"""Reusable visualization helpers for the tutorial notebooks."""
 from pathlib import Path
 
 import numpy as np
@@ -299,9 +299,9 @@ except ImportError:  # pragma: no cover - only used outside notebooks
     display = print
 
 try:
-    from .loader import DLCoalSimShard
+    from .loader import Shard
 except ImportError:
-    from loader import DLCoalSimShard
+    from loader import Shard
 
 
 def plot_target_curve(sample, time_mids=None):
@@ -460,8 +460,8 @@ def _as_shards(dataset_or_loader):
     if isinstance(dataset_or_loader, (str, Path)):
         root = Path(dataset_or_loader)
         if root.is_file():
-            return [DLCoalSimShard(root)]
-        return [DLCoalSimShard(p) for p in sorted((root / "samples").glob("shard_*.npz"))]
+            return [Shard(root)]
+        return [Shard(p) for p in sorted((root / "samples").glob("shard_*.npz"))]
     return list(dataset_or_loader)
 
 
@@ -500,7 +500,7 @@ def plot_random_targets(dataset_or_loader, metadata, n=20, time_mids=None, rando
 
 
 VALIDATE_DATASET_PY = r'''
-"""Quick DLCoalSim dataset validation checks."""
+"""Quick dataset validation checks."""
 
 from __future__ import annotations
 
@@ -518,9 +518,9 @@ SUPPORTED_GENERATOR_SCHEMA_VERSION = __GENERATOR_SCHEMA_VERSION__
 import pandas as pd
 
 try:
-    from .loader import DLCoalSimShard
+    from .loader import Shard
 except ImportError:
-    from loader import DLCoalSimShard
+    from loader import Shard
 
 
 def _check_monotone(name, arr):
@@ -580,7 +580,7 @@ def validate_dataset(data_dir):
     assert shards, "no shard_*.npz files found"
     seen = 0
     for shard_path in shards:
-        shard = DLCoalSimShard(shard_path)
+        shard = Shard(shard_path)
         for i in range(len(shard)):
             sample = shard.get(i, unpack=False)
             assert np.isfinite(sample["target_log10_ne"]).all(), "target contains non-finite values"
@@ -638,7 +638,7 @@ def validate_dataset(data_dir):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("data_dir", nargs="?", default=".", help="DLCoalSim dataset directory")
+    parser.add_argument("data_dir", nargs="?", default=".", help="dataset directory")
     args = parser.parse_args(argv)
     validate_dataset(args.data_dir)
 
@@ -692,18 +692,18 @@ TIME_MIDS = CONFIG.get("time_mids")
 
 
 def tutorial_notebooks() -> dict[str, dict]:
-    intro = """This notebook is part of the DLCoalSim tutorial suite.
+    intro = """This notebook is one of the tutorials written beside every NeCast simulation dataset.
 
-DLCoalSim stores minimally processed simulated observations rather than model-specific precomputed statistics. You are encouraged to compute your own features from haplotypes, variant positions, and observed maps."""
+The dataset stores minimally processed simulated observations rather than model-specific precomputed statistics. You are encouraged to compute your own features from haplotypes, variant positions, and observed maps."""
 
     return {
         "00_quickstart.ipynb": _notebook(
             [
-                _md(f"# DLCoalSim Quickstart\n\n{intro}\n\nThis notebook shows how to load one shard, inspect one sample, and access haplotypes, variant positions, observed maps, target log10 Ne(t), and metadata."),
+                _md(f"# Quickstart\n\n{intro}\n\nThis notebook shows how to load one shard, inspect one sample, and access haplotypes, variant positions, observed maps, target log10 Ne(t), and metadata."),
                 _code(COMMON_SETUP),
-                _code("import pandas as pd\n\nfrom scripts.loader import DLCoalSimShard"),
+                _code("import pandas as pd\n\nfrom scripts.loader import Shard"),
                 _code("df = pd.read_csv(META_PATH)\ndf.head()"),
-                _code("shard = DLCoalSimShard(SHARD_PATH)\nsample = shard.get(0)\n\nsample.keys()"),
+                _code("shard = Shard(SHARD_PATH)\nsample = shard.get(0)\n\nsample.keys()"),
                 _code(
                     'print("sample_id:", sample["sample_id"])\n'
                     'print("sequence_length:", sample["sequence_length"])\n'
@@ -720,7 +720,7 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
                 _code(COMMON_SETUP),
                 _code(
                     "import pandas as pd\n\n"
-                    "from scripts.loader import DLCoalSimShard\n"
+                    "from scripts.loader import Shard\n"
                     "from scripts.viz import (\n"
                     "    plot_target_curve,\n"
                     "    plot_genotype_heatmap,\n"
@@ -729,7 +729,7 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
                     "    show_metadata_card,\n"
                     ")"
                 ),
-                _code("df = pd.read_csv(META_PATH)\nshard = DLCoalSimShard(SHARD_PATH)\nsample = shard.get(0)\nsample['metadata']"),
+                _code("df = pd.read_csv(META_PATH)\nshard = Shard(SHARD_PATH)\nsample = shard.get(0)\nsample['metadata']"),
                 _md("The target is a log-time bin average of log10 Ne, not a single midpoint sample."),
                 _code("plot_target_curve(sample, time_mids=TIME_MIDS)"),
                 _md("Rows are variant sites and columns are haplotypes. Adjacent haplotype columns are the two haplotypes of one diploid individual."),
@@ -777,10 +777,10 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
         ),
         "04_compute_basic_features.ipynb": _notebook(
             [
-                _md(f"# Compute Basic Features\n\n{intro}\n\nDLCoalSim-Core does not precompute SFS, LD, pi, or haplotype features. This notebook shows a baseline window feature recipe that you can replace."),
+                _md(f"# Compute Basic Features\n\n{intro}\n\nThe dataset does not precompute SFS, LD, pi, or haplotype features. This notebook shows a baseline window feature recipe that you can replace."),
                 _code(COMMON_SETUP),
-                _code("import matplotlib.pyplot as plt\n\nfrom scripts.loader import DLCoalSimShard\nfrom scripts.features import basic_window_stats"),
-                _code("shard = DLCoalSimShard(SHARD_PATH)\nsample = shard.get(0)\n\nG = sample['genotypes']\npos = sample['positions_bp']\nseq_len = sample['sequence_length']\n\nX = basic_window_stats(pos, G, seq_len, n_windows=512)\nX.shape"),
+                _code("import matplotlib.pyplot as plt\n\nfrom scripts.loader import Shard\nfrom scripts.features import basic_window_stats"),
+                _code("shard = Shard(SHARD_PATH)\nsample = shard.get(0)\n\nG = sample['genotypes']\npos = sample['positions_bp']\nseq_len = sample['sequence_length']\n\nX = basic_window_stats(pos, G, seq_len, n_windows=512)\nX.shape"),
                 _code("plt.figure(figsize=(8, 3))\nplt.plot(X[:, 0])\nplt.xlabel('Window')\nplt.ylabel('SNP density')\nplt.tight_layout()\nplt.show()"),
                 _code("plt.figure(figsize=(8, 3))\nplt.plot(X[:, 1])\nplt.xlabel('Window')\nplt.ylabel('Pi proxy')\nplt.tight_layout()\nplt.show()"),
                 _code("plt.figure(figsize=(8, 3))\nplt.plot(X[:, 2])\nplt.xlabel('Window')\nplt.ylabel('Singleton fraction')\nplt.tight_layout()\nplt.show()"),

@@ -507,7 +507,7 @@ def rename_samples(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DLCoalSim dataset admin")
+    parser = argparse.ArgumentParser(description="NeCast simulation dataset admin")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     check = sub.add_parser("check")

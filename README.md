@@ -4,15 +4,15 @@ NeCast estimates how the size of a population changed through time, from the
 genotypes of 32 individuals. It reads the genome in windows of 30 Mb and gives
 the effective population size (Ne) in 64 time intervals, from 50 to 500,000
 generations ago. The estimates come from a neural network trained on
-simulations that included sequencing errors and variable recombination, so
-NeCast reads a recombination map along with the genotypes, and the genotypes
-need not be phased.
+simulations with sequencing errors and variable recombination. NeCast reads a
+recombination map along with the genotypes, and the genotypes need not be
+phased.
 
 ![NeCast on the example data: the estimate in purple, the true history in black](docs/example.png)
 
 ## Install
 
-NeCast needs Python 3.11 or newer, on Linux or macOS.
+NeCast needs Python 3.11 or newer, on Linux or on macOS with Apple silicon.
 
 ```bash
 pip install git+https://github.com/larryivan/NeCast
@@ -45,7 +45,7 @@ Other species: give the mutation rate, and a recombination map (`--rec-map`)
 or one recombination rate for the whole genome:
 
 ```bash
-necast run data.vcf.gz --mask accessible.bed --mu 2.8e-9 --rec-rate 1e-8 --out results
+necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out results
 ```
 
 NeCast needs:

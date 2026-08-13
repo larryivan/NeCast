@@ -9,8 +9,8 @@ necast run VCF --mask BED --out FOLDER [options]
 | `--mask BED` | the accessible sequence (required) |
 | `--out FOLDER` | where to write the results (required) |
 | `--human` | human data on GRCh38: see [Human data](#human-data) |
-| `--mu RATE` | mutation rate per bp per generation |
-| `--rec-rate RATE` | one recombination rate per bp per generation for the whole genome |
+| `--mu RATE` | mutation rate per bp per generation (required unless `--human`) |
+| `--rec-rate RATE` | one recombination rate per bp per generation for the whole genome (this or `--rec-map` is required unless `--human`) |
 | `--rec-map BED` | recombination map in cM/Mb, instead of `--rec-rate` |
 | `--mut-map BED` | relative mutation rates along the genome |
 | `--samples FILE` | the individuals to read, one per line (default: every sample in the VCF) |

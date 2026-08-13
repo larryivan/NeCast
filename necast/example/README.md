@@ -13,6 +13,8 @@ with the truth and with `expected.tsv`.
 | `truth.tsv` | the true size history, on NeCast's 64 time intervals |
 | `expected.tsv` | the result of `necast example` when this release was made |
 
-The window is the first of history EMP_CEU, setting b, of the
+The window is the first of history EMP_CEU (a published size history of the
+CEU population) in setting b (slices of the deCODE and Roulette maps, with
+sequencing errors) of the
 [NeCast benchmark](https://huggingface.co/datasets/Larrivhan/NeCast-benchmark);
 `scripts/make_example.py` builds these files from it.

@@ -1974,22 +1974,25 @@ def _generation_runtime_state() -> dict[str, object]:
             )
         source_files.append(relative)
 
-    repo_root = source_root.parent
+    # Only a NeCast checkout has a commit: git run from an installed copy would
+    # report whatever repository happens to enclose site-packages.
+    repo_root = source_root.parents[1]
     git_commit: str | None = None
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--verify", "HEAD"],
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        candidate = completed.stdout.strip()
-        if len(candidate) == 40:
-            git_commit = candidate
-    except (OSError, subprocess.SubprocessError):
-        pass
+    if (repo_root / ".git").exists():
+        try:
+            completed = subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            candidate = completed.stdout.strip()
+            if len(candidate) == 40:
+                git_commit = candidate
+        except (OSError, subprocess.SubprocessError):
+            pass
     return {
         "python_implementation": platform.python_implementation(),
         "python_version": platform.python_version(),

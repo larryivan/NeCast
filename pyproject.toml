@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,7 @@ description = "Population size history from unphased genotypes and genetic maps"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+license-files = ["LICENSE", "necast/third_party/psmcplus/LICENSE.txt"]
 authors = [{ name = "Yufan Han" }]
 keywords = ["population genetics", "effective population size", "demographic inference", "coalescent"]
 classifiers = [
@@ -22,14 +23,14 @@ dependencies = [
     "matplotlib>=3.9",
     "numba>=0.60",
     "numpy>=2",
-    "torch>=2.3",
+    "torch>=2.4",
 ]
 
 [project.optional-dependencies]
 # necast simulate. msprime 1.4.2 made the published simulations; pandas writes
 # the metadata tables beside every dataset.
-simulate = ["msprime==1.4.2", "pandas>=2.0", "tqdm>=4.60"]
-# Only to rebuild the shipped maps and histories, never to use them.
+simulate = ["msprime==1.4.2", "pandas>=2.2.2", "tqdm>=4.60"]
+# Only to rebuild the deCODE map and the stdpopsim histories, never to use them.
 build-assets = ["stdpopsim==0.3.0", "pyBigWig>=0.3"]
 dev = ["pytest>=8.0"]
 

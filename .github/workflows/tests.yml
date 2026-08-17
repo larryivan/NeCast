@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install bgzip and tabix
-        run: if [ "$RUNNER_OS" = Linux ]; then sudo apt-get install -y tabix; else brew install htslib; fi
+        run: if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y tabix; else brew install htslib; fi
       - name: Install NeCast
         run: |
           if [ "$RUNNER_OS" = Linux ]; then pip install torch --index-url https://download.pytorch.org/whl/cpu; fi

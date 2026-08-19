@@ -47,7 +47,14 @@ DEMO_IDS = {
 }
 ID_TO_DEMO = {v: k for k, v in DEMO_IDS.items()}
 
-DEFAULT_RECOMB_MAP = "maps/recomb_map/output/palsson_2025_autosomes_hg38.bed"
+# deCODE 2019 (Halldorsson et al., Science 363:eaau1043): 4,531,535 localised
+# crossovers, average map resolution 682 bp, native GRCh38.  It replaces the
+# Palsson 2025 table, which is published in 1 Mb windows and therefore holds
+# no structure at the scale that breaks haplotype tracts -- its crossover
+# column is this same map re-binned.  Kept beside it for the megabase-scale
+# non-crossover information, which is a different quantity.
+DEFAULT_RECOMB_MAP = "maps/recomb_map/output/decode2019_avg_hg38.bed"
+LEGACY_RECOMB_MAP = "maps/recomb_map/output/palsson_2025_autosomes_hg38.bed"
 DEFAULT_MUT_MAP = "maps/mut_map/output/roulette_2023_autosomes_hg38_1000bp.bed"
 
 @dataclass
@@ -72,8 +79,8 @@ class Config:
 
     p_clean_constant: float = 0.25
     p_random_global: float = 0.20
-    p_custom_hetero: float = 0.45
-    p_empirical_slice: float = 0.10
+    p_custom_hetero: float = 0.35
+    p_empirical_slice: float = 0.20
     p_stdpopsim_anchor: float = 0.00
 
     p_constant: float = 0.04
@@ -121,7 +128,9 @@ class Config:
 
     recomb_map: str = DEFAULT_RECOMB_MAP
     mut_map: str = DEFAULT_MUT_MAP
-    recomb_map_unit: str = "per_bp"
+    # The deCODE bigWig is distributed in cM/Mb; writing the source units
+    # rather than pre-converting keeps the file checkable against UCSC.
+    recomb_map_unit: str = "cM_per_Mb"
     mut_map_unit: str = "per_bp"
     mut_map_scale_to_baseline: bool = True
 
@@ -164,8 +173,8 @@ def apply_preset(cfg: Config) -> Config:
         cfg.workers = -1
         cfg.p_clean_constant = 0.25
         cfg.p_random_global = 0.20
-        cfg.p_custom_hetero = 0.45
-        cfg.p_empirical_slice = 0.10
+        cfg.p_custom_hetero = 0.35
+        cfg.p_empirical_slice = 0.20
         cfg.p_stdpopsim_anchor = 0.0
     elif cfg.preset == "full_v01":
         cfg.dataset_name = "DLCoalSim-Full-v0.1"
@@ -177,8 +186,8 @@ def apply_preset(cfg: Config) -> Config:
         cfg.workers = -1
         cfg.p_clean_constant = 0.10
         cfg.p_random_global = 0.15
-        cfg.p_custom_hetero = 0.60
-        cfg.p_empirical_slice = 0.15
+        cfg.p_custom_hetero = 0.55
+        cfg.p_empirical_slice = 0.20
         cfg.p_stdpopsim_anchor = 0.0
     else:
         raise ValueError(f"Unknown preset: {cfg.preset}")

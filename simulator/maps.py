@@ -57,6 +57,69 @@ def _overlapping_intervals(pos: np.ndarray, center: float, width: float) -> np.n
     return mask
 
 
+# Calibration targets, measured rather than assumed.
+#
+# Recombination: deCODE 2019 on chr20 between 10 and 26 Mb carries 393 runs
+# above ten times the mean rate, a median run width of 466 bp, and 1.76% of
+# sequence in them.  Scaled to a twenty-megabase row that is roughly 490
+# hotspots.  The generator previously drew 3 to 15 "hotspots" 1 to 20 kb wide,
+# and because a multiplier was applied to whole segments their realised width
+# was the segment they landed in -- 39 to 156 kb, twenty to seventy times what
+# was declared.
+HOTSPOT_PER_MB = 24.5
+HOTSPOT_WIDTH_BP = (300.0, 2_000.0)
+HOTSPOT_FACTOR = (10.0, 100.0)
+# Coldspots exist -- recombination deserts are real -- but a hundredfold
+# suppression across two megabases is not.  Softened accordingly.
+COLDSPOT_COUNT_RANGE = (0, 4)   # rng.integers is half-open
+COLDSPOT_WIDTH_BP = (50_000.0, 500_000.0)
+COLDSPOT_FACTOR = (0.1, 0.5)
+# Mutation: Roulette on chr20 between 10 and 26 Mb gives a megabase-scale
+# p90/p10 of 1.12 and a kilobase-scale p90/p10 of 1.34.  Real mutation rate has
+# no hotspot architecture at all: its fine-scale variation is sequence context
+# at single sites (CpG), which a binary mutation model cannot represent, and
+# its regional variation is a smooth 1.2-fold drift.  So the mutation map gets
+# the broad walk and nothing else, at a standard deviation calibrated to that
+# megabase target.
+MUTATION_BROAD_SD = 0.06
+RECOMBINATION_BROAD_SD = 0.55
+# Retains the ceiling the previous generator applied as a literal.
+MAX_SYNTHETIC_RATE_MULTIPLIER = 200.0
+
+
+def _refined_grid(pos: np.ndarray, features: list[tuple[float, float, float]]) -> np.ndarray:
+    """Add every feature edge to the breakpoints.
+
+    Without this a multiplier lands on whole segments, so a feature is as wide
+    as whatever segment contains it rather than as wide as it was drawn.  That
+    was the single largest source of unrealistic structure in this generator.
+    """
+
+    edges = [pos]
+    for left, right, _ in features:
+        edges.append(np.array([left, right], dtype=np.float64))
+    grid = np.unique(np.concatenate(edges))
+    return grid[(grid >= pos[0]) & (grid <= pos[-1])]
+
+
+def _length_weighted_mean(rates: np.ndarray, pos: np.ndarray) -> float:
+    """The mean that decides how many events actually occur.
+
+    Normalising by the unweighted segment mean instead leaves the realised
+    rate off by however much rate and segment width happen to correlate, and
+    they do correlate: a feature applied by interval overlap preferentially
+    hits wide segments.  Measured on the previous generator, the realised
+    recombination rate averaged 1.655 times the configured baseline, with a
+    tenth-to-ninetieth percentile spread of 1.06 to 2.36.
+    """
+
+    widths = np.diff(pos)
+    total = widths.sum()
+    if total <= 0:
+        raise ValueError("a rate map must span a positive length")
+    return float((np.asarray(rates) * widths).sum() / total)
+
+
 def synthetic_heterogeneous_map(
     rng: np.random.Generator,
     cfg: Config,
@@ -69,53 +132,102 @@ def synthetic_heterogeneous_map(
     seg_min, seg_max = _segment_range(cfg, is_mut)
     n_segments = int(rng.integers(seg_min, seg_max + 1))
     internal = np.sort(rng.uniform(0, length, size=n_segments - 1))
-    pos = np.unique(np.concatenate([[0.0], internal, [float(length)]])).astype(np.float64)
-    n = len(pos) - 1
+    base_pos = np.unique(
+        np.concatenate([[0.0], internal, [float(length)]])
+    ).astype(np.float64)
 
-    broad_sd = 0.25 if is_mut else 0.55
-    rw = np.cumsum(rng.normal(0, broad_sd, size=n))
-    rw = (rw - rw.mean()) / (rw.std() + 1e-8)
-    rates = baseline * np.exp((0.25 if is_mut else 0.55) * rw)
+    broad_sd = MUTATION_BROAD_SD if is_mut else RECOMBINATION_BROAD_SD
+    walk = np.cumsum(rng.normal(0, broad_sd, size=len(base_pos) - 1))
+    walk = (walk - walk.mean()) / (walk.std() + 1e-8)
+    base_rates = baseline * np.exp(broad_sd * walk)
 
+    # Features are drawn as spans, then the grid is refined so each applies to
+    # exactly the span it was drawn with.  Mutation gets none: see the
+    # calibration note above.
+    features: list[tuple[float, float, float]] = []
     hot_widths: list[float] = []
     cold_widths: list[float] = []
-    if is_mut:
-        n_hot = int(rng.integers(1, 5))
-        hot_factor = (2, 12)
-    else:
-        n_hot = int(rng.integers(3, 16))
-        hot_factor = (5, 80)
-    for _ in range(n_hot):
-        center = float(rng.uniform(0, length))
-        width = _sample_bp_width(rng, length, 1_000.0, 20_000.0)
-        hot_widths.append(width)
-        rates[_overlapping_intervals(pos, center, width)] *= rng.uniform(*hot_factor)
+    if not is_mut:
+        n_hot = int(rng.poisson(HOTSPOT_PER_MB * length / 1_000_000.0))
+        for _ in range(n_hot):
+            width = _sample_bp_width(rng, length, *HOTSPOT_WIDTH_BP)
+            centre = float(rng.uniform(0, length))
+            hot_widths.append(width)
+            features.append(
+                (
+                    max(0.0, centre - width / 2.0),
+                    min(float(length), centre + width / 2.0),
+                    float(rng.uniform(*HOTSPOT_FACTOR)),
+                )
+            )
+        for _ in range(int(rng.integers(*COLDSPOT_COUNT_RANGE))):
+            width = _sample_bp_width(rng, length, *COLDSPOT_WIDTH_BP)
+            centre = float(rng.uniform(0, length))
+            cold_widths.append(width)
+            features.append(
+                (
+                    max(0.0, centre - width / 2.0),
+                    min(float(length), centre + width / 2.0),
+                    float(rng.uniform(*COLDSPOT_FACTOR)),
+                )
+            )
 
-    n_cold = int(rng.integers(0, 4))
-    for _ in range(n_cold):
-        center = float(rng.uniform(0, length))
-        width = _sample_bp_width(rng, length, 50_000.0, 2_000_000.0)
-        cold_widths.append(width)
-        rates[_overlapping_intervals(pos, center, width)] *= rng.uniform(0.01, 0.3)
+    pos = _refined_grid(base_pos, features)
+    # Carry the broad walk onto the refined grid by locating each refined
+    # segment inside the base grid it came from.
+    midpoints = 0.5 * (pos[:-1] + pos[1:])
+    owner = np.clip(
+        np.searchsorted(base_pos, midpoints, side="right") - 1,
+        0,
+        len(base_rates) - 1,
+    )
+    rates = base_rates[owner]
+    for left, right, factor in features:
+        covered = (pos[:-1] >= left) & (pos[1:] <= right)
+        rates = np.where(covered, rates * factor, rates)
 
-    rates = rates * (baseline / (rates.mean() + 1e-30))
-    rates = np.clip(rates, baseline * 1e-5, baseline * 200)
+    # Clip first, then normalise.  The other order lets the ceiling remove
+    # rate that the normalisation has already counted, so the realised mean
+    # lands below the baseline -- measured at 0.810 with the ceiling applied
+    # afterwards.  Normalising last makes the realised mean exactly the
+    # baseline and can lift the maximum slightly past the nominal ceiling,
+    # which is a guard against msprime's 1e-4 limit rather than a bound with
+    # meaning of its own: two hundred times the baseline is 2e-6.
+    rates = np.clip(
+        rates,
+        baseline * 1e-5,
+        baseline * MAX_SYNTHETIC_RATE_MULTIPLIER,
+    )
+    rates = rates * (baseline / _length_weighted_mean(rates, pos))
 
-    obs = rates * rng.lognormal(0, obs_noise_sigma, size=rates.shape)
+    # A lognormal with zero location has mean exp(sigma^2 / 2), so the observed
+    # map integral would sit systematically above the truth -- 3.2% at the
+    # default sigma of 0.25.  ``nw_log10`` divides the segregating count by
+    # that integral, so the bias lands directly on the baseline every model
+    # predicts a residual around.  Shifting the location makes the multiplier
+    # mean exactly one.
+    obs = rates * rng.lognormal(
+        -0.5 * obs_noise_sigma**2, obs_noise_sigma, size=rates.shape
+    )
     if hotspot_missing_prob > 0:
         high = obs > np.quantile(obs, 0.95)
         miss = high & (rng.random(obs.shape) < hotspot_missing_prob)
         obs[miss] = baseline * rng.uniform(0.5, 2.0, size=miss.sum())
     obs = np.clip(obs, baseline * 1e-6, baseline * 500)
     meta = {
-        "synthetic_map_segments": int(n),
+        "synthetic_map_segments": int(len(pos) - 1),
+        "synthetic_base_segments": int(len(base_pos) - 1),
         "map_is_mutation": bool(is_mut),
-        "hotspot_model": "bp_interval_overlap",
-        "hotspot_count": int(n_hot),
-        "coldspot_count": int(n_cold),
+        "hotspot_model": "refined_grid_exact_span",
+        "hotspot_count": int(len(hot_widths)),
+        "coldspot_count": int(len(cold_widths)),
         "hotspot_width_bp_mean": float(np.mean(hot_widths)) if hot_widths else 0.0,
         "coldspot_width_bp_mean": float(np.mean(cold_widths)) if cold_widths else 0.0,
         "observed_noise_sigma": float(obs_noise_sigma),
+        "broad_sd": float(broad_sd),
+        "realised_rate_over_baseline": float(
+            _length_weighted_mean(rates, pos) / baseline
+        ),
     }
     return pos, rates.astype(np.float64), pos.copy(), obs.astype(np.float64), meta
 

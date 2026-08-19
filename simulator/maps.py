@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import msprime
 import numpy as np
 
@@ -57,60 +59,186 @@ def _overlapping_intervals(pos: np.ndarray, center: float, width: float) -> np.n
     return mask
 
 
-# Calibration targets, measured rather than assumed.
+# Calibration targets, all measured from the maps in ``maps/`` rather than
+# chosen.  Reference windows: chr1 20-40 Mb and chr20 10-26 Mb, both clear of
+# a centromere.
 #
-# Recombination: deCODE 2019 on chr20 between 10 and 26 Mb carries 393 runs
-# above ten times the mean rate, a median run width of 466 bp, and 1.76% of
-# sequence in them.  Scaled to a twenty-megabase row that is roughly 490
-# hotspots.  The generator previously drew 3 to 15 "hotspots" 1 to 20 kb wide,
-# and because a multiplier was applied to whole segments their realised width
-# was the segment they landed in -- 39 to 156 kb, twenty to seventy times what
-# was declared.
-HOTSPOT_PER_MB = 24.5
-HOTSPOT_WIDTH_BP = (300.0, 2_000.0)
-HOTSPOT_FACTOR = (10.0, 100.0)
-# Coldspots exist -- recombination deserts are real -- but a hundredfold
-# suppression across two megabases is not.  Softened accordingly.
+# Recombination, log-rate standard deviation of the length-weighted mean on a
+# regular grid:
+#
+#                    1 kb    10 kb   100 kb    1 Mb
+#   deCODE 2019      3.821   3.472    1.898   0.712
+#   HapMap II        2.088   1.964    1.381   0.615
+#   pyrho CEU        1.321   1.371    1.137   0.688
+#
+# deCODE runs high at fine scale because 18.4% of its 1 kb cells are exactly
+# zero -- no crossover was observed there in 4.5M meioses -- which is counting
+# sparsity rather than biology, so the fine-scale target comes from the two LD
+# maps and the megabase target from all three, which agree there.
+#
+# Autocorrelation of log rate on 10 kb cells is 0.65 at one cell, 0.50 at two,
+# 0.27 at ten, and then flattens near 0.08 out to megabases.  That plateau is
+# the reason the background here is a separate slow component rather than a
+# single decaying one: a map is a megabase-scale landscape with kilobase-scale
+# hotspots on it, not one process.
+#
+# Hotspots: chr20 between 10 and 26 Mb carries 393 runs above ten times the
+# mean, a median run width of 466 bp, and 1.76% of sequence in them.
+BACKGROUND_CELL_BP = 2_000
+# 24.6 runs per megabase were measured, but a run merges hotspots that abut,
+# so the generating density is higher than the counted one.
+HOTSPOT_PER_MB = 60.0
+HOTSPOT_WIDTH_BP = (200.0, 1_200.0)
+HOTSPOT_FACTOR = (15.0, 200.0)
 COLDSPOT_COUNT_RANGE = (0, 4)   # rng.integers is half-open
 COLDSPOT_WIDTH_BP = (50_000.0, 500_000.0)
 COLDSPOT_FACTOR = (0.1, 0.5)
-# Mutation: Roulette on chr20 between 10 and 26 Mb gives a megabase-scale
-# p90/p10 of 1.12 and a kilobase-scale p90/p10 of 1.34.  Real mutation rate has
-# no hotspot architecture at all: its fine-scale variation is sequence context
-# at single sites (CpG), which a binary mutation model cannot represent, and
-# its regional variation is a smooth 1.2-fold drift.  So the mutation map gets
-# the broad walk and nothing else, at a standard deviation calibrated to that
-# megabase target.
-MUTATION_BROAD_SD = 0.06
-RECOMBINATION_BROAD_SD = 0.55
+# Drawn per row rather than fixed.  The measured amplitude differs more
+# between maps (1.30 for pyrho against 1.76 for HapMap II, at 10 kb) than
+# between windows of one map (1.72 to 2.02 within HapMap II), so a single
+# constant would be both wrong and a fingerprint: every synthetic row would
+# carry the same log-rate spread to nine decimal places, which is a label the
+# model can condition on.  These brackets straddle the measured range.
+RECOMBINATION_BROAD_SD = (0.50, 1.50)
+RECOMBINATION_CORRELATION_BP = (200_000.0, 3_000_000.0)
+#
+# Mutation, Roulette on chr1 20-60 Mb in 1 kb bins: log-rate sd 0.132, with a
+# megabase p90/p10 of 1.12, and autocorrelation 0.39 at one kilobase falling
+# to a 0.08 plateau beyond 200 kb.  So the variance is mostly local -- that is
+# sequence context, which is uncorrelated between kilobases -- sitting on a
+# very mild megabase drift.  There are no mutation hotspots: fine-scale
+# mutation variation is a property of single sites, which a binary mutation
+# model cannot represent at all.
+MUTATION_BROAD_SD = (0.03, 0.07)
+MUTATION_CORRELATION_BP = (1_000_000.0, 10_000_000.0)
+MUTATION_LOCAL_SD = (0.08, 0.16)
+# Not white noise: Roulette's autocorrelation is 0.39 at one kilobase and
+# 0.25 at ten, so the local term carries a correlation length of its own.
+MUTATION_LOCAL_CORRELATION_BP = (1_500.0, 12_000.0)
+MUTATION_CELL_BP = 1_000
 # Retains the ceiling the previous generator applied as a literal.
 MAX_SYNTHETIC_RATE_MULTIPLIER = 200.0
+# A published map reports the average rate in bins of its own, which both
+# hides the true breakpoints and partly smooths a hotspot it did not resolve.
+OBSERVED_CELL_BP = (1_000.0, 20_000.0)
 
 
-def _refined_grid(pos: np.ndarray, features: list[tuple[float, float, float]]) -> np.ndarray:
-    """Add every feature edge to the breakpoints.
+def _ornstein_uhlenbeck(
+    rng: np.random.Generator, n_cells: int, cell_bp: float, correlation_bp: float
+) -> np.ndarray:
+    """A unit-variance process whose correlation decays over a real distance.
 
-    Without this a multiplier lands on whole segments, so a feature is as wide
-    as whatever segment contains it rather than as wide as it was drawn.  That
-    was the single largest source of unrealistic structure in this generator.
+    The previous background was a random walk indexed by segment number, and
+    segment widths were spacings of uniform draws.  Measured on that version,
+    the log rate moved by 0.0105 across a segment at the 25th width percentile
+    and 0.0097 across one at the 75th -- the same jump over four times the
+    sequence -- so the correlation length in base pairs was an artefact of the
+    segmentation rather than a property of the map.
+
+    Nothing standardises the result: the realised amplitude has to vary from
+    row to row, because forcing it constant is what turned the old generator's
+    spread into a fingerprint.
     """
 
-    edges = [pos]
-    for left, right, _ in features:
-        edges.append(np.array([left, right], dtype=np.float64))
-    grid = np.unique(np.concatenate(edges))
-    return grid[(grid >= pos[0]) & (grid <= pos[-1])]
+    if n_cells <= 0:
+        raise ValueError("a background needs at least one cell")
+    retention = math.exp(-float(cell_bp) / float(correlation_bp))
+    innovation = math.sqrt(max(1.0 - retention * retention, 0.0))
+    noise = rng.normal(0.0, 1.0, size=n_cells)
+    out = np.empty(n_cells, dtype=np.float64)
+    out[0] = noise[0]
+    for index in range(1, n_cells):
+        out[index] = retention * out[index - 1] + innovation * noise[index]
+    return out
+
+
+def _apply_spans(
+    edges: np.ndarray, rates: np.ndarray, spans: list[tuple[float, float, float]]
+) -> np.ndarray:
+    """Multiply exactly the sequence each span covers.
+
+    The edges are already in the grid, so a span multiplies the cells it was
+    drawn over and no others.  Applying a multiplier to whole pre-existing
+    segments instead made a feature as wide as the segment containing it: 39
+    to 156 kb for one drawn at 1 to 20 kb.
+    """
+
+    out = rates.copy()
+    for left, right, factor in spans:
+        covered = (edges[:-1] >= left) & (edges[1:] <= right)
+        out = np.where(covered, out * factor, out)
+    return out
+
+
+def _observed_view(
+    rng: np.random.Generator,
+    edges: np.ndarray,
+    rates: np.ndarray,
+    baseline: float,
+    obs_noise_sigma: float,
+    hotspot_missing_prob: float,
+    has_hotspots: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """What a published map of this region would look like.
+
+    Re-binned onto a grid of its own, so the true breakpoints are not visible
+    in it.  That mattered once the feature edges entered the true grid: the
+    observed map was returned on the same edges, which handed over every
+    hotspot position exactly and noised only the intensities.  A real
+    published map is uncertain about where the hotspots are -- PRDM9 alleles
+    differ between populations and move them -- not just about how strong they
+    are.
+
+    The lognormal multiplier is centred so its mean is one.  With a zero
+    location it has mean ``exp(sigma^2/2)``, so the observed integral sat 3.2%
+    above the truth in every row at the default sigma, and ``nw_log10``
+    divides the segregating count by exactly that integral.
+    """
+
+    length = float(edges[-1])
+    cell = float(loguniform(rng, *OBSERVED_CELL_BP))
+    obs_edges = np.arange(0.0, length + cell, cell)
+    obs_edges[-1] = length
+    if len(obs_edges) < 2:
+        obs_edges = np.array([0.0, length])
+
+    cumulative = np.concatenate(([0.0], np.cumsum(rates * np.diff(edges))))
+    integrated = np.interp(obs_edges, edges, cumulative)
+    obs = np.diff(integrated) / np.diff(obs_edges)
+
+    obs = obs * rng.lognormal(
+        -0.5 * obs_noise_sigma**2, obs_noise_sigma, size=obs.shape
+    )
+    # Only a map with hotspots can miss one.  Applying this to the mutation
+    # map, which has none, rewrote the top ventile of a smooth drift to model
+    # a phenomenon that does not exist there.
+    if has_hotspots and hotspot_missing_prob > 0 and len(obs) > 20:
+        high = obs > np.quantile(obs, 0.95)
+        miss = high & (rng.random(obs.shape) < hotspot_missing_prob)
+        if miss.any():
+            obs[miss] = baseline * rng.uniform(0.5, 2.0, size=int(miss.sum()))
+            # Replacing the top ventile with something near the baseline
+            # removes rate, so without this the observed integral lands
+            # systematically low -- 0.9679 of the truth at the default
+            # dropout, against 1.0016 with it switched off.  The lognormal
+            # above was centred for exactly this reason; missing a hotspot
+            # should change where a published map puts its rate, not how much
+            # of it there is in total.
+            widths = np.diff(obs_edges)
+            scale = (rates * np.diff(edges)).sum() / (obs * widths).sum()
+            obs = obs * scale
+    obs = np.clip(obs, baseline * 1e-6, baseline * 500)
+    return obs_edges, obs
 
 
 def _length_weighted_mean(rates: np.ndarray, pos: np.ndarray) -> float:
     """The mean that decides how many events actually occur.
 
     Normalising by the unweighted segment mean instead leaves the realised
-    rate off by however much rate and segment width happen to correlate, and
-    they do correlate: a feature applied by interval overlap preferentially
-    hits wide segments.  Measured on the previous generator, the realised
-    recombination rate averaged 1.655 times the configured baseline, with a
-    tenth-to-ninetieth percentile spread of 1.06 to 2.36.
+    rate off by however much rate and segment width correlate, and they do:
+    a feature applied by interval overlap preferentially hits wide segments.
+    Measured on the previous generator, the realised recombination rate
+    averaged 1.655 times the configured baseline, spread 1.06 to 2.36.
     """
 
     widths = np.diff(pos)
@@ -128,43 +256,54 @@ def synthetic_heterogeneous_map(
     obs_noise_sigma: float,
     hotspot_missing_prob: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
-    length = cfg.seq_len
-    seg_min, seg_max = _segment_range(cfg, is_mut)
-    n_segments = int(rng.integers(seg_min, seg_max + 1))
-    internal = np.sort(rng.uniform(0, length, size=n_segments - 1))
-    base_pos = np.unique(
-        np.concatenate([[0.0], internal, [float(length)]])
-    ).astype(np.float64)
+    length = int(cfg.seq_len)
+    cell = MUTATION_CELL_BP if is_mut else BACKGROUND_CELL_BP
+    cell = float(min(cell, max(1.0, length)))
 
-    broad_sd = MUTATION_BROAD_SD if is_mut else RECOMBINATION_BROAD_SD
-    walk = np.cumsum(rng.normal(0, broad_sd, size=len(base_pos) - 1))
-    walk = (walk - walk.mean()) / (walk.std() + 1e-8)
-    base_rates = baseline * np.exp(broad_sd * walk)
+    broad_sd = float(loguniform(rng, *(MUTATION_BROAD_SD if is_mut else RECOMBINATION_BROAD_SD)))
+    correlation_bp = float(
+        loguniform(
+            rng,
+            *(MUTATION_CORRELATION_BP if is_mut else RECOMBINATION_CORRELATION_BP),
+        )
+    )
 
-    # Features are drawn as spans, then the grid is refined so each applies to
-    # exactly the span it was drawn with.  Mutation gets none: see the
-    # calibration note above.
-    features: list[tuple[float, float, float]] = []
+    n_cells = max(1, int(math.ceil(length / cell)))
+    edges = np.concatenate((np.arange(n_cells, dtype=np.float64) * cell, [float(length)]))
+    log_rate = broad_sd * _ornstein_uhlenbeck(rng, n_cells, cell, correlation_bp)
+
+    local_sd = 0.0
+    if is_mut:
+        # Sequence context: real at the scale of single sites, and between
+        # kilobases it is nearly independent -- Roulette's autocorrelation is
+        # 0.39 at one kilobase.  A binary mutation model has no sequence to
+        # condition on, so it enters as an uncorrelated cell-level term.
+        local_sd = float(loguniform(rng, *MUTATION_LOCAL_SD))
+        local_correlation = float(loguniform(rng, *MUTATION_LOCAL_CORRELATION_BP))
+        log_rate = log_rate + local_sd * _ornstein_uhlenbeck(
+            rng, n_cells, cell, local_correlation
+        )
+
+    spans: list[tuple[float, float, float]] = []
     hot_widths: list[float] = []
     cold_widths: list[float] = []
     if not is_mut:
-        n_hot = int(rng.poisson(HOTSPOT_PER_MB * length / 1_000_000.0))
-        for _ in range(n_hot):
+        for _ in range(int(rng.poisson(HOTSPOT_PER_MB * length / 1_000_000.0))):
             width = _sample_bp_width(rng, length, *HOTSPOT_WIDTH_BP)
             centre = float(rng.uniform(0, length))
             hot_widths.append(width)
-            features.append(
+            spans.append(
                 (
                     max(0.0, centre - width / 2.0),
                     min(float(length), centre + width / 2.0),
-                    float(rng.uniform(*HOTSPOT_FACTOR)),
+                    float(loguniform(rng, *HOTSPOT_FACTOR)),
                 )
             )
         for _ in range(int(rng.integers(*COLDSPOT_COUNT_RANGE))):
             width = _sample_bp_width(rng, length, *COLDSPOT_WIDTH_BP)
             centre = float(rng.uniform(0, length))
             cold_widths.append(width)
-            features.append(
+            spans.append(
                 (
                     max(0.0, centre - width / 2.0),
                     min(float(length), centre + width / 2.0),
@@ -172,64 +311,56 @@ def synthetic_heterogeneous_map(
                 )
             )
 
-    pos = _refined_grid(base_pos, features)
-    # Carry the broad walk onto the refined grid by locating each refined
-    # segment inside the base grid it came from.
-    midpoints = 0.5 * (pos[:-1] + pos[1:])
+    # Feature edges join the grid so each span multiplies exactly what it
+    # covers.  The background is carried across by locating each refined cell
+    # in the regular grid it came from, which leaves it a function of physical
+    # position rather than of the refinement.
+    pos = np.unique(
+        np.concatenate([edges] + [np.array([a, b]) for a, b, _ in spans])
+    ) if spans else edges
+    pos = pos[(pos >= 0.0) & (pos <= float(length))]
     owner = np.clip(
-        np.searchsorted(base_pos, midpoints, side="right") - 1,
+        np.searchsorted(edges, 0.5 * (pos[:-1] + pos[1:]), side="right") - 1,
         0,
-        len(base_rates) - 1,
+        n_cells - 1,
     )
-    rates = base_rates[owner]
-    for left, right, factor in features:
-        covered = (pos[:-1] >= left) & (pos[1:] <= right)
-        rates = np.where(covered, rates * factor, rates)
+    rates = baseline * np.exp(log_rate[owner])
+    rates = _apply_spans(pos, rates, spans)
 
     # Clip first, then normalise.  The other order lets the ceiling remove
-    # rate that the normalisation has already counted, so the realised mean
-    # lands below the baseline -- measured at 0.810 with the ceiling applied
-    # afterwards.  Normalising last makes the realised mean exactly the
-    # baseline and can lift the maximum slightly past the nominal ceiling,
-    # which is a guard against msprime's 1e-4 limit rather than a bound with
-    # meaning of its own: two hundred times the baseline is 2e-6.
-    rates = np.clip(
-        rates,
-        baseline * 1e-5,
-        baseline * MAX_SYNTHETIC_RATE_MULTIPLIER,
-    )
+    # rate the normalisation has already counted, which left the realised mean
+    # at 0.810 of the baseline.
+    rates = np.clip(rates, baseline * 1e-5, baseline * MAX_SYNTHETIC_RATE_MULTIPLIER)
     rates = rates * (baseline / _length_weighted_mean(rates, pos))
 
-    # A lognormal with zero location has mean exp(sigma^2 / 2), so the observed
-    # map integral would sit systematically above the truth -- 3.2% at the
-    # default sigma of 0.25.  ``nw_log10`` divides the segregating count by
-    # that integral, so the bias lands directly on the baseline every model
-    # predicts a residual around.  Shifting the location makes the multiplier
-    # mean exactly one.
-    obs = rates * rng.lognormal(
-        -0.5 * obs_noise_sigma**2, obs_noise_sigma, size=rates.shape
+    obs_pos, obs = _observed_view(
+        rng,
+        pos,
+        rates,
+        baseline,
+        obs_noise_sigma,
+        hotspot_missing_prob,
+        has_hotspots=bool(hot_widths),
     )
-    if hotspot_missing_prob > 0:
-        high = obs > np.quantile(obs, 0.95)
-        miss = high & (rng.random(obs.shape) < hotspot_missing_prob)
-        obs[miss] = baseline * rng.uniform(0.5, 2.0, size=miss.sum())
-    obs = np.clip(obs, baseline * 1e-6, baseline * 500)
     meta = {
-        "synthetic_map_segments": int(len(pos) - 1),
-        "synthetic_base_segments": int(len(base_pos) - 1),
+        "synthetic_map_segments": int(len(rates)),
+        "background_cell_bp": float(cell),
         "map_is_mutation": bool(is_mut),
-        "hotspot_model": "refined_grid_exact_span",
+        "hotspot_model": "physical_grid_exact_span",
         "hotspot_count": int(len(hot_widths)),
         "coldspot_count": int(len(cold_widths)),
         "hotspot_width_bp_mean": float(np.mean(hot_widths)) if hot_widths else 0.0,
         "coldspot_width_bp_mean": float(np.mean(cold_widths)) if cold_widths else 0.0,
         "observed_noise_sigma": float(obs_noise_sigma),
-        "broad_sd": float(broad_sd),
+        "broad_sd": broad_sd,
+        "local_sd": local_sd,
+        "correlation_bp": correlation_bp,
+        "observed_segments": int(len(obs)),
         "realised_rate_over_baseline": float(
             _length_weighted_mean(rates, pos) / baseline
         ),
     }
-    return pos, rates.astype(np.float64), pos.copy(), obs.astype(np.float64), meta
+    return pos, rates.astype(np.float64), obs_pos, obs.astype(np.float64), meta
 
 
 def choose_source(rng: np.random.Generator, cfg: Config, empirical_available: bool) -> str:
@@ -255,6 +386,7 @@ def sample_maps_for_source(
     empirical: EmpiricalMapStore,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
     obs_noise = cfg.observed_map_noise
+    empirical_noise = getattr(cfg, "empirical_map_noise", obs_noise)
     miss_prob = cfg.hotspot_missing_prob
 
     meta: dict = {"source_type": source}
@@ -289,17 +421,17 @@ def sample_maps_for_source(
     elif source == "empirical_map_slice" and empirical.is_available(cfg.seq_len):
         chrom = str(rng.choice(empirical.common_chroms(cfg.seq_len)))
         rec_pos, rec_rate, obs_rec_pos, obs_rec_rate, rec_meta = slice_piecewise_map(
-            rng, empirical.rec_maps[chrom], cfg.seq_len, obs_noise, cfg.baseline_rec
+            rng, empirical.rec_maps[chrom], cfg.seq_len, empirical_noise, cfg.baseline_rec
         )
         mut_pos, mut_rate, obs_mut_pos, obs_mut_rate, mut_meta = slice_piecewise_map(
-            rng, empirical.mut_maps[chrom], cfg.seq_len, obs_noise * 0.6, cfg.baseline_mu
+            rng, empirical.mut_maps[chrom], cfg.seq_len, empirical_noise * 0.6, cfg.baseline_mu
         )
         meta.update({
             "map_type": "empirical_slice",
             "map_mode": "empirical_slice",
             "recomb_mode": "empirical_slice",
             "mu_mode": "empirical_slice",
-            "observed_noise_sigma": obs_noise,
+            "observed_noise_sigma": empirical_noise,
             "rec_slice": rec_meta,
             "mut_slice": mut_meta,
         })

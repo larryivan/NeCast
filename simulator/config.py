@@ -124,6 +124,13 @@ class Config:
     map_segments_min: int = 128
     map_segments_max: int = 512
     observed_map_noise: float = 0.25
+    # Noise on a real map handed to the model, kept separate from the
+    # synthetic one because it is a different quantity: it stands for the
+    # error in a published map rather than for the error in a map this code
+    # generated.  At 0.25 the observed map correlates 0.993 in log rate with
+    # the truth, which is to say it is the truth; two real maps of the same
+    # region correlate 0.687 at a kilobase and 0.954 at a megabase.
+    empirical_map_noise: float = 1.0
     hotspot_missing_prob: float = 0.10
 
     recomb_map: str = DEFAULT_RECOMB_MAP

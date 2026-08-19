@@ -61,6 +61,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--min-cm-per-mb",
+        type=float,
+        default=0.1,
+        help=(
+            "floor on the rate, in cM/Mb.  A pedigree map reports zero where "
+            "no crossover was observed, which is sparsity rather than an "
+            "absence of recombination: 18.4%% of 1 kb cells on chr1 between 20 "
+            "and 40 Mb are exactly zero, and in those same cells HapMap II "
+            "reports a median of 6.6%% of its mean and pyrho CEU 17.0%%, "
+            "neither of them ever zero.  A true zero would mean the interval "
+            "never recombines and its whole span shares one genealogy, which "
+            "at 18.4%% of cells is 3.7 Mb of a twenty-megabase row.  A tenth "
+            "of a cM/Mb is 8%% of the genome-wide mean of 1.2315"
+        ),
+    )
+    parser.add_argument(
         "--merge-tolerance",
         type=float,
         default=0.0,
@@ -120,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
             # a zero rate and an absent measurement are different claims, and
             # the slicer already treats gaps as the baseline.
             usable = [
-                (int(a), int(b), min(float(v), args.max_cm_per_mb))
+                (int(a), int(b), min(max(float(v), args.min_cm_per_mb), args.max_cm_per_mb))
                 for a, b, v in raw
                 if v == v and b > a
             ]

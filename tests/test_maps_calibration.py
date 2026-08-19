@@ -203,6 +203,7 @@ def test_the_mutation_map_has_no_hotspots_or_coldspots() -> None:
         pos, rates, _, _, meta = _draw(True, seed=seed)
         assert meta["hotspot_count"] == 0
         assert meta["coldspot_count"] == 0
+        assert meta["hotspot_model"] == "physical_grid_exact_span"
         fraction, runs = _hot_runs(pos, rates)
         assert fraction == 0.0
         assert len(runs) == 0
@@ -257,3 +258,92 @@ def test_every_preset_draws_a_fifth_of_rows_from_a_real_map() -> None:
             + cfg.p_stdpopsim_anchor
         )
         assert total == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------
+# What the refactor onto a physical grid was for
+# --------------------------------------------------------------------------
+
+
+def test_the_background_correlates_over_a_distance_not_over_segments() -> None:
+    """The old background was a walk indexed by segment number.
+
+    Segment widths were spacings of uniform draws, so the correlation length
+    in base pairs was set by the segmentation: measured on that version, the
+    log rate moved 0.0105 across a segment at the 25th width percentile and
+    0.0097 across one at the 75th -- the same jump over four times the
+    sequence.  A background on a regular physical grid cannot do that.
+    """
+
+    # Compared across draws rather than within one: the background now lives
+    # on a regular grid, so the informative contrast is between rows whose
+    # correlation length differs, not between segments of one row.
+    lengths, decays = [], []
+    for seed in range(30):
+        pos, rates, _, _, meta = _draw(False, seed=seed)
+        cell = meta["background_cell_bp"]
+        edges = np.arange(0.0, SEQ_LEN + 50_000.0, 50_000.0)
+        cumulative = np.concatenate(([0.0], np.cumsum(rates * np.diff(pos))))
+        gridded = np.diff(np.interp(edges, pos, cumulative)) / np.diff(edges)
+        log = np.log(gridded[gridded > 0])
+        lengths.append(meta["correlation_bp"])
+        decays.append(float(np.corrcoef(log[:-4], log[4:])[0, 1]))
+    lengths, decays = np.array(lengths), np.array(decays)
+    # A longer drawn correlation length must show as a slower measured decay.
+    assert np.corrcoef(np.log(lengths), decays)[0, 1] > 0.5
+
+
+def test_the_amplitude_is_drawn_per_row_rather_than_fixed() -> None:
+    """A constant amplitude is both wrong and a label.
+
+    The old generator standardised the walk, so every synthetic row carried
+    the same log-rate spread to nine decimal places -- 0.06000 across two
+    hundred draws.  A model can condition on that and identify the source.
+    """
+
+    spreads = []
+    for seed in range(24):
+        _, rates, _, _, _ = _draw(True, seed=seed)
+        spreads.append(float(np.log(rates).std()))
+    spreads = np.array(spreads)
+    assert spreads.std() > 0.005, spreads
+
+
+def test_the_observed_map_does_not_reveal_the_true_breakpoints() -> None:
+    """It is re-binned onto a grid of its own.
+
+    Returning it on the true edges handed over every boundary of the true map
+    exactly -- and once feature edges joined that grid, that meant every
+    hotspot position, with only the intensities noised.  A published map is
+    uncertain about where the hotspots are, not only about how strong.
+    """
+
+    for seed in range(4):
+        pos, _, obs_pos, obs, meta = _draw(False, seed=seed)
+        assert not np.array_equal(pos, obs_pos)
+        assert len(obs) == len(obs_pos) - 1
+        assert meta["observed_segments"] == len(obs)
+
+
+def test_the_hotspot_dropout_only_applies_where_hotspots_exist() -> None:
+    """The mutation map has none, so rewriting its top ventile modelled a
+    phenomenon that does not occur there."""
+
+    for seed in range(4):
+        _, _, _, obs, meta = _draw(True, seed=seed)
+        assert meta["hotspot_count"] == 0
+        # Checked against the flag itself rather than against a threshold on
+        # the values: with hotspots the dropout fires and changes the map,
+        # without them it must be inert.
+        from simulator.maps import _observed_view
+
+        pos_a, rates_a, _, _, _ = _draw(False, seed=seed)
+        quiet = _observed_view(
+            np.random.default_rng(1), pos_a, rates_a, BASELINE_REC, 0.25, 0.10,
+            has_hotspots=False,
+        )[1]
+        loud = _observed_view(
+            np.random.default_rng(1), pos_a, rates_a, BASELINE_REC, 0.25, 0.10,
+            has_hotspots=True,
+        )[1]
+        assert not np.array_equal(quiet, loud)

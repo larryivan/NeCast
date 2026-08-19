@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
+from .utils import loguniform
 
 
 @dataclass
@@ -62,6 +63,8 @@ def _read_table_maybe_gzip(path: str) -> pd.DataFrame:
 
 ROULETTE_RAW_TO_PER_GEN = 1.015e-7
 RECOMB_CM_PER_MB_TO_PER_BP = 1.0e-8
+# A published map has a resolution of its own, coarser than the truth.
+OBSERVED_CELL_BP = (1_000.0, 20_000.0)
 RECOMB_MAP_UNITS = {"per_bp", "cM_per_Mb"}
 MUT_MAP_UNITS = {"per_bp", "relative", "roulette_raw"}
 
@@ -393,7 +396,31 @@ def slice_piecewise_map(
             pos[-1] = float(length)
 
     true_rate = np.clip(rate, baseline_rate * 1e-4, baseline_rate * 500)
-    obs_rate = true_rate * rng.lognormal(0.0, obs_noise_sigma, size=true_rate.shape)
+
+    # The observed map is what the model is handed and is expected to trust.
+    # It is re-binned onto a grid of its own before the noise is applied, for
+    # two reasons.  Returning it on the true breakpoints handed over every
+    # boundary of the real map exactly -- every hotspot edge included -- and
+    # noised only the intensities, when a published map is uncertain about
+    # where the hotspots are as much as about how strong they are.  And a real
+    # map reports the average rate in its own bins, which also smooths a
+    # hotspot it did not resolve.
+    obs_cell = float(loguniform(rng, *OBSERVED_CELL_BP))
+    obs_pos = np.arange(0.0, float(length) + obs_cell, obs_cell)
+    if len(obs_pos) < 2:
+        obs_pos = np.array([0.0, float(length)], dtype=np.float64)
+    obs_pos[-1] = float(length)
+    cumulative = np.concatenate(([0.0], np.cumsum(true_rate * np.diff(pos))))
+    integrated = np.interp(obs_pos, pos, cumulative)
+    obs_rate = np.diff(integrated) / np.diff(obs_pos)
+
+    # Centred so the multiplier has mean one.  With a zero location a lognormal
+    # has mean exp(sigma^2 / 2), so the observed map integral sat above the
+    # truth in every row, and nw_log10 divides the segregating count by exactly
+    # that integral.
+    obs_rate = obs_rate * rng.lognormal(
+        -0.5 * obs_noise_sigma**2, obs_noise_sigma, size=obs_rate.shape
+    )
     obs_rate = np.clip(obs_rate, baseline_rate * 1e-5, baseline_rate * 1000)
     meta = {
         "chrom": rate_map.chrom,
@@ -406,5 +433,13 @@ def slice_piecewise_map(
         "mean_rate_after_scaling": rate_map.mean_rate_after_scaling,
         "scaling_method": rate_map.scaling_method,
         "source_format": rate_map.source_format,
+        "observed_cell_bp": obs_cell,
+        "observed_noise_sigma": float(obs_noise_sigma),
     }
-    return pos.astype(np.float64), true_rate.astype(np.float64), pos.astype(np.float64), obs_rate.astype(np.float64), meta
+    return (
+        pos.astype(np.float64),
+        true_rate.astype(np.float64),
+        obs_pos.astype(np.float64),
+        obs_rate.astype(np.float64),
+        meta,
+    )

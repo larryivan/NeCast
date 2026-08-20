@@ -5,8 +5,16 @@ import json
 import time
 from pathlib import Path
 
-from .config import Config, DEMO_IDS, SOURCE_IDS
-from .utils import time_grid
+from .config import (
+    DEMOGRAPHY_TYPE_IDS,
+    DEMO_IDS,
+    GENERATOR_RECIPE_IDS,
+    SOURCE_IDS,
+    Config,
+    validate_config,
+)
+from .dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
+from .utils import demography_generation_grid, time_grid
 
 
 README_TEMPLATE = """# {dataset_name}
@@ -38,29 +46,53 @@ not precomputed in the core dataset.
 - `metadata/samples.parquet`: optional summary parquet when the local environment supports it
 - `config.json` and `manifest.json`: generation config and dataset manifest
 
-Shard files are written with NumPy's lossless `np.savez_compressed` path by
-default. Missing genotypes are stored as sparse per-sample row-major indices
+Shard files are written as lossless NPZ archives using the configured DEFLATE
+level. Missing genotypes are stored as sparse per-sample row-major indices
 (`missing_flat_idx`, `missing_offsets`) rather than as a dense missing matrix.
+Each sample stores a merged scientific `demography_type_id` and an append-only
+`generator_recipe_id`. The legacy `demography_id` remains an exact alias of
+`generator_recipe_id`, preserving its historical numeric namespace. Decode IDs
+with the mappings in `config.json` or `manifest.json`.
 
 Targets are log-time bin averages, not midpoint samples. This keeps short
 events such as recent bottlenecks visible in labels when they overlap a time bin.
+Every built-in preset writes 64 target bins. The target grid is deliberately
+separate from the latent population-history generation grid, so changing target
+resolution does not change the sampled history, genotype data, maps, or noise
+for a fixed seed. Both grids are recorded in `config.json` and `manifest.json`.
+When migrating a custom schema-v3 command, pass its old `time_bins` value as
+`--demography-generation-bins` to reproduce the old latent prior, then choose
+the v4 target resolution separately with `--time-bins`.
 Main simulator samples are generated as diploid individuals (`ploidy=2`), so
 `n_haplotypes` must be even. Phase switch noise swaps the two haplotypes within
 each diploid individual after sampled switch points; this is recorded as
 `phase_switch_model="diploid_pair_switch"` and `phase_pairing`.
-`scenario_key` combines demography, map mode, and noise profile for convenient
-filtering without making fixed train/validation/test splits.
+`scenario_key` combines the public demography type, map mode, and noise profile
+for convenient filtering without making fixed train/validation/test splits.
+`generator_recipe_key` provides the same grouping at the fine-grained recipe
+level.
 
 Demography sampling uses a registry of named samplers rather than one large
 conditional block. It includes constant and near-constant controls, recent
-bottlenecks, recent founder recovery, continuous exponential growth/decline
-approximated by multiple epochs, serial founder events, ancient+recent compound
-events, mild/strong oscillating histories, dense bin-aligned histories, classic
-sawtooth histories, and optional empirical human Ne templates inferred by tools
-such as SMC++, PHLaSH, and MSMC2. Metadata includes summary fields
-such as `n_epochs`, `has_recent_event`, `has_ancient_event`, `min_Ne`, `max_Ne`,
+bottlenecks, recent founder recovery, native continuous exponential
+growth/decline, serial founder events, ancient+recent compound events,
+mild/strong continuous zigzag histories, dense bin-aligned histories, opt-in
+fixed `Zigzag_1S14` and SMC++ sawtooth validation models, and optional
+empirical human Ne templates inferred by tools such as SMC++, PHLaSH, and
+MSMC2. Continuous
+histories use msprime growth rates directly, and their labels are analytic
+log-time averages of the same trajectory. Metadata includes the full
+`demography_breaks`, `demography_values`, and `demography_growth_rates` needed
+to reconstruct the ground truth. The public `demography_type` is consolidated
+into interpretable scientific classes such as `constant`, `bottleneck`,
+`exponential_growth`, and `zigzag`; the exact original sampler name remains in
+`generator_recipe` for reproducibility. Summary fields include `n_epochs`,
+`has_recent_event`, `has_ancient_event`, `min_Ne`, `max_Ne`,
 `Ne_ratio_max_min`, `recent_min_Ne`, `ancient_mean_Ne`, `event_severity`, and
-`event_duration` for filtering and benchmark recipes.
+`event_duration` for filtering and benchmark recipes. `event_severity` is
+uniformly `min_Ne / max_Ne`; any recipe-specific legacy definition is preserved
+as `recipe_event_severity`. Shape descriptors include `log10_ne_range`,
+`total_variation_log10`, `turn_count`, `direction`, and `trajectory_form`.
 Sample quality metadata includes `variant_density_per_mb`, explicit noise rates,
 missing genotype counts, phase switch counts, and observed map rate summaries
 (`mean/std/min/max`) for quick corpus filtering without reading the shard arrays.
@@ -70,7 +102,9 @@ default (`p_stdpopsim_anchor=0`) and are included only when requested with
 `--enable-stdpopsim`. Their target metadata keeps `target_quality` because many
 stdpopsim models include population structure, migration, or admixture, so these
 anchors should not be treated as the same strict single-population supervision as
-the custom simulator samples.
+the custom simulator samples. Native growth rates are preserved for the selected
+population, but the target remains a proxy whenever the source model is
+structured.
 Two-population migration/admixture stress cases should follow the same anchor
 pattern and be labeled with proxy target quality rather than mixed into the strict
 single-population supervised core.
@@ -146,17 +180,27 @@ def basic_window_stats(positions_bp, G_vh, seq_len, n_windows=512):
 
 LOADER_PY = r'''
 """Tiny loader example for DLCoalSim shards."""
+
+# Substituted from ``SAMPLE_GENERATOR_SCHEMA_VERSION`` when this script is
+# written.  See the note in ``validate_dataset.py``.
 import gzip
 import json
 from pathlib import Path
 
 import numpy as np
 
+SUPPORTED_GENERATOR_SCHEMA_VERSION = __GENERATOR_SCHEMA_VERSION__
+
 
 class DLCoalSimShard:
     def __init__(self, shard_path):
         self.shard_path = Path(shard_path)
         self.data = np.load(self.shard_path, allow_pickle=False)
+        self.generator_schema_version = int(self.data["generator_schema_version"][0])
+        if self.generator_schema_version != SUPPORTED_GENERATOR_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported generator schema: {self.generator_schema_version}"
+            )
         self.n = len(self.data["sample_id"])
         self.n_haplotypes = int(self.data["n_haplotypes"][0])
         self.packed_hap_bytes = int(self.data["packed_hap_bytes"][0])
@@ -194,6 +238,11 @@ class DLCoalSimShard:
         seq_len = int(seq[i] if len(seq) > 1 else seq[0])
         sample = {
             "sample_id": str(self.data["sample_id"][i]),
+            "source_id": int(self.data["source_id"][i]),
+            "demography_id": int(self.data["demography_id"][i]),
+            "demography_type_id": int(self.data["demography_type_id"][i]),
+            "generator_recipe_id": int(self.data["generator_recipe_id"][i]),
+            "generator_schema_version": self.generator_schema_version,
             "sequence_length": seq_len,
             "n_haplotypes": self.n_haplotypes,
             "positions_bp": pos,
@@ -328,7 +377,17 @@ def show_metadata_card(sample):
         "sample_id",
         "source_type",
         "scenario_key",
+        "generator_recipe",
+        "generator_recipe_id",
         "demography_type",
+        "demography_type_id",
+        "demography_id",
+        "history_family",
+        "trajectory_form",
+        "curve_origin",
+        "dataset_regime",
+        "direction",
+        "time_regime",
         "map_mode",
         "noise_profile",
         "n_variants",
@@ -341,7 +400,11 @@ def show_metadata_card(sample):
         "max_Ne",
         "Ne_ratio_max_min",
         "event_severity",
+        "recipe_event_severity",
         "event_duration",
+        "log10_ne_range",
+        "total_variation_log10",
+        "turn_count",
         "genotype_error",
         "missing_rate",
         "n_missing_genotypes",
@@ -419,6 +482,7 @@ def plot_random_targets(dataset_or_loader, metadata, n=20, time_mids=None, rando
 
 VALIDATE_DATASET_PY = r'''
 """Quick DLCoalSim dataset validation checks."""
+
 from __future__ import annotations
 
 import argparse
@@ -427,6 +491,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+# Substituted from ``SAMPLE_GENERATOR_SCHEMA_VERSION`` when this script is
+# written, so the check follows the generator instead of being edited by hand
+# at every bump.
+SUPPORTED_GENERATOR_SCHEMA_VERSION = __GENERATOR_SCHEMA_VERSION__
 import pandas as pd
 
 try:
@@ -451,7 +520,59 @@ def validate_dataset(data_dir):
 
     df = pd.read_csv(meta_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    demography_type_ids = manifest.get("demography_type_ids")
+    generator_recipe_ids = manifest.get("generator_recipe_ids")
+    generator_schema_version = manifest.get("generator_schema_version")
+    time_edges = manifest.get("time_edges")
+    time_mids = manifest.get("time_mids")
+    demography_generation_bins = manifest.get("demography_generation_bins")
+    demography_generation_time_edges = manifest.get(
+        "demography_generation_time_edges"
+    )
+    demography_generation_time_mids = manifest.get(
+        "demography_generation_time_mids"
+    )
+    assert isinstance(demography_type_ids, dict), "manifest has no demography type ID map"
+    assert isinstance(generator_recipe_ids, dict), "manifest has no generator recipe ID map"
+    assert (
+        generator_schema_version == SUPPORTED_GENERATOR_SCHEMA_VERSION
+    ), "unsupported generator schema"
+    assert isinstance(time_mids, list) and time_mids, "manifest has no target time grid"
+    assert (
+        isinstance(demography_generation_bins, int)
+        and demography_generation_bins > 0
+    ), "manifest has no demography generation bin count"
+    target_bins = len(time_mids)
+    assert isinstance(time_edges, list) and len(time_edges) == target_bins + 1, (
+        "invalid target time edges"
+    )
+    assert (
+        isinstance(demography_generation_time_edges, list)
+        and len(demography_generation_time_edges)
+        == demography_generation_bins + 1
+    ), "invalid demography generation time edges"
+    assert (
+        isinstance(demography_generation_time_mids, list)
+        and len(demography_generation_time_mids) == demography_generation_bins
+    ), "invalid demography generation time midpoints"
+    target_edges = np.asarray(time_edges, dtype=float)
+    generation_edges = np.asarray(demography_generation_time_edges, dtype=float)
+    assert np.isfinite(target_edges).all() and np.all(np.diff(target_edges) > 0), (
+        "target time edges are invalid"
+    )
+    assert np.isfinite(generation_edges).all() and np.all(np.diff(generation_edges) > 0), (
+        "demography generation time edges are invalid"
+    )
+    assert target_edges[0] == generation_edges[0], "time-grid lower endpoints differ"
+    assert target_edges[-1] == generation_edges[-1], "time-grid upper endpoints differ"
     assert df["sample_id"].is_unique, "sample_id values must be unique"
+    for column in [
+        "demography_type",
+        "demography_type_id",
+        "generator_recipe",
+        "generator_recipe_id",
+    ]:
+        assert column in df, f"missing metadata column: {column}"
     assert df["n_variants"].ge(0).all(), "n_variants must be non-negative"
     assert df["sequence_length"].gt(0).all(), "sequence_length must be positive"
     for column in ["mean_obs_rec_rate", "mean_obs_mut_rate", "variant_density_per_mb"]:
@@ -466,6 +587,45 @@ def validate_dataset(data_dir):
         for i in range(len(shard)):
             sample = shard.get(i, unpack=False)
             assert np.isfinite(sample["target_log10_ne"]).all(), "target contains non-finite values"
+            assert sample["target_log10_ne"].dtype == np.float32, (
+                "target dtype must be float32"
+            )
+            assert sample["target_log10_ne"].shape == (target_bins,), (
+                "target width differs from manifest time grid"
+            )
+            assert (
+                sample["generator_schema_version"]
+                == SUPPORTED_GENERATOR_SCHEMA_VERSION
+            ), "shard schema mismatch"
+            assert sample["demography_type_id"] >= 0, "invalid demography_type_id"
+            assert sample["generator_recipe_id"] >= 0, "invalid generator_recipe_id"
+            meta = sample.get("metadata", {})
+            assert (
+                int(meta.get("generator_schema_version", -1))
+                == SUPPORTED_GENERATOR_SCHEMA_VERSION
+            ), (
+                "metadata schema mismatch"
+            )
+            assert int(meta.get("target_time_bins", -1)) == target_bins, (
+                "metadata target bin count mismatch"
+            )
+            assert (
+                int(meta.get("demography_generation_bins", -1))
+                == demography_generation_bins
+            ), "metadata demography generation bin count mismatch"
+            demography_type = str(meta.get("demography_type", ""))
+            generator_recipe = str(meta.get("generator_recipe", ""))
+            assert demography_type in demography_type_ids, "unknown demography_type"
+            assert generator_recipe in generator_recipe_ids, "unknown generator_recipe"
+            assert sample["demography_type_id"] == int(
+                demography_type_ids[demography_type]
+            ), "demography type ID/string mismatch"
+            assert sample["generator_recipe_id"] == int(
+                generator_recipe_ids[generator_recipe]
+            ), "generator recipe ID/string mismatch"
+            assert sample["demography_id"] == sample["generator_recipe_id"], (
+                "legacy demography_id/generator_recipe_id mismatch"
+            )
             assert sample["sequence_length"] > 0, "sample sequence_length must be positive"
             _check_monotone("variant", sample["positions_bp"])
             _check_monotone("observed recombination", sample["observed_recombination"]["position_bp"])
@@ -594,6 +754,7 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
                 _code("df = pd.read_csv(META_PATH)\ndf.head()"),
                 _code("plot_column_distribution(df, 'source_type')"),
                 _code("plot_column_distribution(df, 'demography_type')"),
+                _code("plot_column_distribution(df, 'generator_recipe')"),
                 _code("plot_column_distribution(df, 'map_mode')"),
                 _code("plot_column_distribution(df, 'noise_profile')"),
                 _code("plot_numeric_distribution(df, 'n_variants', bins=50)"),
@@ -640,7 +801,7 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
                 _code("import numpy as np\nimport pandas as pd\n\nfrom scripts.validate_dataset import validate_dataset"),
                 _code("df = pd.read_csv(META_PATH)\ndf.describe(include='all')"),
                 _code("assert df['n_variants'].ge(0).all()\nassert df['sequence_length'].gt(0).all()\nassert np.isfinite(df['variant_density_per_mb']).all()\nassert np.isfinite(df['mean_obs_rec_rate']).all()\nassert np.isfinite(df['mean_obs_mut_rate']).all()\nprint('metadata checks passed')"),
-                _code("df[['source_type', 'demography_type', 'map_mode', 'noise_profile']].apply(lambda s: s.value_counts()).fillna(0)"),
+                _code("df[['source_type', 'demography_type', 'generator_recipe', 'map_mode', 'noise_profile']].apply(lambda s: s.value_counts()).fillna(0)"),
                 _code("df[['n_variants', 'variant_density_per_mb', 'missing_rate', 'n_missing_genotypes', 'mean_obs_rec_rate', 'mean_obs_mut_rate', 'Ne_ratio_max_min']].hist(figsize=(12, 8), bins=40);"),
                 _code("validate_dataset(DATA_DIR)"),
             ]
@@ -649,37 +810,79 @@ DLCoalSim stores minimally processed simulated observations rather than model-sp
 
 
 def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
+    validate_config(cfg)
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    manifest_path = out / "manifest.json"
+    manifest_path.unlink(missing_ok=True)
+    manifest_path.with_name(f"{manifest_path.name}.tmp").unlink(missing_ok=True)
+
+    def write_atomic(path: Path, text: str) -> None:
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        tmp_path.write_text(text, encoding="utf-8")
+        tmp_path.replace(path)
+
     edges, mids = time_grid(cfg)
+    generation_edges, generation_mids = demography_generation_grid(cfg)
     config_dict = dataclasses.asdict(cfg)
     config_dict["time_edges"] = edges.tolist()
     config_dict["time_mids"] = mids.tolist()
+    config_dict["demography_generation_time_edges"] = generation_edges.tolist()
+    config_dict["demography_generation_time_mids"] = generation_mids.tolist()
     config_dict["source_ids"] = SOURCE_IDS
     config_dict["demography_ids"] = DEMO_IDS
-    (out / "config.json").write_text(json.dumps(config_dict, indent=2, ensure_ascii=False), encoding="utf-8")
+    config_dict["demography_type_ids"] = DEMOGRAPHY_TYPE_IDS
+    config_dict["generator_recipe_ids"] = GENERATOR_RECIPE_IDS
+    config_dict["generator_schema_version"] = SAMPLE_GENERATOR_SCHEMA_VERSION
+    write_atomic(
+        out / "config.json",
+        json.dumps(config_dict, indent=2, ensure_ascii=False),
+    )
 
     manifest = {
         "dataset_name": cfg.dataset_name,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "samples": sample_manifest,
+        "time_bins": int(cfg.time_bins),
         "time_edges": edges.tolist(),
         "time_mids": mids.tolist(),
+        "demography_generation_bins": int(cfg.demography_generation_bins),
+        "demography_generation_time_edges": generation_edges.tolist(),
+        "demography_generation_time_mids": generation_mids.tolist(),
         "source_ids": SOURCE_IDS,
         "demography_ids": DEMO_IDS,
+        "demography_type_ids": DEMOGRAPHY_TYPE_IDS,
+        "generator_recipe_ids": GENERATOR_RECIPE_IDS,
+        "generator_schema_version": SAMPLE_GENERATOR_SCHEMA_VERSION,
     }
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     (out / "README.md").write_text(README_TEMPLATE.format(dataset_name=cfg.dataset_name), encoding="utf-8")
 
     scripts = out / "scripts"
     scripts.mkdir(exist_ok=True)
     (scripts / "__init__.py").write_text("", encoding="utf-8")
     (scripts / "features.py").write_text(FEATURES_PY, encoding="utf-8")
-    (scripts / "loader.py").write_text(LOADER_PY, encoding="utf-8")
+    (scripts / "loader.py").write_text(
+        LOADER_PY.replace(
+            "__GENERATOR_SCHEMA_VERSION__", str(SAMPLE_GENERATOR_SCHEMA_VERSION)
+        ),
+        encoding="utf-8",
+    )
     (scripts / "viz.py").write_text(VIZ_PY, encoding="utf-8")
-    (scripts / "validate_dataset.py").write_text(VALIDATE_DATASET_PY, encoding="utf-8")
+    (scripts / "validate_dataset.py").write_text(
+        VALIDATE_DATASET_PY.replace(
+            "__GENERATOR_SCHEMA_VERSION__", str(SAMPLE_GENERATOR_SCHEMA_VERSION)
+        ),
+        encoding="utf-8",
+    )
 
     notebooks = out / "notebooks"
     notebooks.mkdir(exist_ok=True)
     for name, notebook in tutorial_notebooks().items():
         (notebooks / name).write_text(json.dumps(notebook, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # The root manifest is the final publication marker for all dataset support
+    # files; publish it atomically only after every other artifact succeeds.
+    write_atomic(
+        manifest_path,
+        json.dumps(manifest, indent=2, ensure_ascii=False),
+    )

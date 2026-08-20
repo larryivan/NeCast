@@ -55,6 +55,8 @@ data/templates/*
 !data/templates/README.md
 !data/templates/human_ne/
 !data/templates/human_ne/**
+!data/templates/stdpopsim_single_pop/
+!data/templates/stdpopsim_single_pop/**
 data/**/.DS_Store
 data/**/.Rhistory
 shards/

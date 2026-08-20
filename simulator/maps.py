@@ -5,7 +5,7 @@ import math
 import msprime
 import numpy as np
 
-from .config import Config
+from .config import MAX_MSPRIME_RATE, MAX_SYNTHETIC_RATE_MULTIPLIER, Config
 from .empirical_maps import EmpiricalMapStore, slice_piecewise_map
 from .utils import loguniform
 
@@ -29,7 +29,7 @@ def make_rate_map(pos: np.ndarray, rates: np.ndarray) -> msprime.RateMap:
         raise ValueError("RateMap contains non-finite positions or rates")
     if np.any(np.diff(pos) <= 0):
         raise ValueError("RateMap positions must be strictly increasing")
-    if np.nanmax(rates) > 1e-4:
+    if np.nanmax(rates) > MAX_MSPRIME_RATE:
         raise ValueError("RateMap rates are too large; expected per-bp per-generation probabilities")
     return msprime.RateMap(position=pos, rate=rates)
 
@@ -47,16 +47,6 @@ def _sample_bp_width(rng: np.random.Generator, length: int, lo: float, hi: float
     upper = max(1.0, min(float(hi), float(length)))
     lower = max(1.0, min(float(lo), upper))
     return loguniform(rng, lower, upper)
-
-
-def _overlapping_intervals(pos: np.ndarray, center: float, width: float) -> np.ndarray:
-    left = max(0.0, float(center) - float(width) / 2.0)
-    right = min(float(pos[-1]), float(center) + float(width) / 2.0)
-    mask = (pos[:-1] < right) & (pos[1:] > left)
-    if not mask.any():
-        idx = int(np.clip(np.searchsorted(pos, center, side="right") - 1, 0, len(pos) - 2))
-        mask[idx] = True
-    return mask
 
 
 # Calibration targets, all measured from the maps in ``maps/`` rather than
@@ -116,11 +106,117 @@ MUTATION_LOCAL_SD = (0.08, 0.16)
 # 0.25 at ten, so the local term carries a correlation length of its own.
 MUTATION_LOCAL_CORRELATION_BP = (1_500.0, 12_000.0)
 MUTATION_CELL_BP = 1_000
-# Retains the ceiling the previous generator applied as a literal.
-MAX_SYNTHETIC_RATE_MULTIPLIER = 200.0
 # A published map reports the average rate in bins of its own, which both
 # hides the true breakpoints and partly smooths a hotspot it did not resolve.
+# How a published map is wrong.  The noise here used to be one lognormal draw
+# per cell, independent of its neighbours, and that has a consequence at scale:
+# independent error averages away.  Measured against the truth, the map handed
+# to the model correlated 0.720 in log rate at a kilobase -- close to the 0.687
+# two real published maps of the same region manage -- but 0.984 at a hundred
+# kilobases where the real pair manage 0.890.  Zoomed out, our map was almost
+# perfect, and a model can learn to trust the coarse map completely.  On real
+# data that is false: a published map is wrong in patches, because what makes
+# it wrong is how much data went into a region and what the method assumed
+# there, and neither of those changes cell by cell.
+#
+# So the error has two parts, and they are given separate amplitudes rather
+# than a shared one split by a fraction, because they are calibrated against
+# different measurements.  ``observed_map_noise`` sets the per-cell part and is
+# pinned by the kilobase-scale correlation; the regional part is pinned by the
+# hundred-kilobase one, where averaging has already removed everything else.
+#
+# The correlation length has to sit near the scale it is meant to spoil, not
+# far above it.  A field correlated over many megabases is, across one row, a
+# constant -- and a constant multiplier does not change a correlation at all,
+# because it shifts the log rate rather than reshaping it.  What makes two real
+# maps disagree at a hundred kilobases is error that varies on that scale:
+# regions with different amounts of data behind them, hundreds of kilobases
+# across.
+# Relative to the map, not absolute.  A recombination map's log rate has a
+# standard deviation near 0.5 across a row and a mutation map's near 0.04, so
+# one absolute amplitude cannot serve both: measured at an absolute 0.25, the
+# observed recombination map correlated 0.851 with the truth while the observed
+# mutation map correlated 0.163 -- five to eight times more noise than signal,
+# which is not a noisy map, it is no map.  The error is now a fraction of
+# whatever spread the true map has, so it lands in the same place on both.
+# Per-row jitter around whatever ratio the config asks for.  The config value
+# is the ratio itself -- error log-spread over the true map's log-spread -- not
+# an absolute amplitude, so this multiplies rather than replaces it.
+OBSERVED_NOISE_RATIO = (0.75, 1.30)
+# Share of that error which is regional rather than per-cell.  Regional error
+# survives averaging and per-cell error does not, and it is the surviving part
+# that decides how wrong a map still is once a model has zoomed out.
+OBSERVED_NOISE_REGIONAL_SHARE = (0.55, 0.90)
+OBSERVED_NOISE_REGIONAL_CORRELATION_BP = (80_000.0, 1_500_000.0)
+# A separate, absolute error on the map's overall level, in natural log.  This
+# one is not relative, because it stands for something else: published rate
+# estimates disagree about the total, not only about where the rate sits.  It
+# matters more than its size suggests -- the observed integral is what a
+# segregating count gets divided by, so this is a direct scale error on the
+# effective size a model reads off the row.
+OBSERVED_NOISE_SCALE_SIGMA = (0.03, 0.18)
 OBSERVED_CELL_BP = (1_000.0, 20_000.0)
+
+
+def observed_noise_multiplier(
+    rng: np.random.Generator,
+    n_cells: int,
+    cell_bp: float,
+    sigma: float,
+    true_rates: np.ndarray | None = None,
+) -> np.ndarray:
+    """The multiplicative error between the true map and the published one.
+
+    Two components with separate amplitudes: a regional field correlated over
+    megabases, and independent per-cell noise.  The regional part is what makes
+    the error survive averaging, which is what a real map's disagreement does
+    and an independent draw's does not -- and it is the part that decides how
+    wrong the map still is once a model has zoomed out far enough for the
+    per-cell noise to have cancelled.
+
+    Centred so the multiplier has mean one.  A lognormal with a zero location
+    has mean ``exp(sigma**2 / 2)``, and the observed integral is what the
+    segregating count gets divided by, so an uncentred draw biases every row
+    in the same direction.
+    """
+
+    if n_cells <= 0:
+        return np.ones(0, dtype=np.float64)
+    if sigma <= 0.0:
+        return np.ones(n_cells, dtype=np.float64)
+
+    # How much the true map itself moves, in natural log.  Everything except
+    # the overall-level error is measured against this.
+    spread = 0.0
+    if true_rates is not None:
+        positive = np.asarray(true_rates, dtype=np.float64)
+        positive = positive[positive > 0.0]
+        if positive.size > 2:
+            spread = float(np.std(np.log(positive)))
+    if spread <= 0.0:
+        # A flat map has no structure to get wrong; only its level can be.
+        scale_sigma = float(rng.uniform(*OBSERVED_NOISE_SCALE_SIGMA))
+        offset = float(rng.normal(0.0, scale_sigma))
+        return np.full(
+            n_cells, math.exp(offset - 0.5 * scale_sigma**2), dtype=np.float64
+        )
+
+    ratio = float(rng.uniform(*OBSERVED_NOISE_RATIO)) * float(sigma)
+    share = float(rng.uniform(*OBSERVED_NOISE_REGIONAL_SHARE))
+    correlation = float(loguniform(rng, *OBSERVED_NOISE_REGIONAL_CORRELATION_BP))
+    structural = ratio * spread
+    regional = (
+        structural
+        * math.sqrt(share)
+        * _ornstein_uhlenbeck(rng, n_cells, cell_bp, correlation)
+    )
+    per_cell = (
+        structural * math.sqrt(1.0 - share) * rng.normal(0.0, 1.0, size=n_cells)
+    )
+    scale_sigma = float(rng.uniform(*OBSERVED_NOISE_SCALE_SIGMA))
+    offset = float(rng.normal(0.0, scale_sigma))
+    total_variance = structural**2 + scale_sigma**2
+    return np.exp(regional + per_cell + offset - 0.5 * total_variance)
 
 
 def _ornstein_uhlenbeck(
@@ -206,8 +302,8 @@ def _observed_view(
     integrated = np.interp(obs_edges, edges, cumulative)
     obs = np.diff(integrated) / np.diff(obs_edges)
 
-    obs = obs * rng.lognormal(
-        -0.5 * obs_noise_sigma**2, obs_noise_sigma, size=obs.shape
+    obs = obs * observed_noise_multiplier(
+        rng, obs.shape[0], cell, obs_noise_sigma, true_rates=obs
     )
     # Only a map with hotspots can miss one.  Applying this to the mutation
     # map, which has none, rewrote the top ventile of a smooth drift to model
@@ -420,18 +516,37 @@ def sample_maps_for_source(
         })
     elif source == "empirical_map_slice" and empirical.is_available(cfg.seq_len):
         chrom = str(rng.choice(empirical.common_chroms(cfg.seq_len)))
+        start_min, start_max = empirical.common_slice_start_bounds(chrom, cfg.seq_len)
+        shared_start = start_min if start_min == start_max else float(rng.uniform(start_min, start_max))
+        shared_end = shared_start + cfg.seq_len
         rec_pos, rec_rate, obs_rec_pos, obs_rec_rate, rec_meta = slice_piecewise_map(
-            rng, empirical.rec_maps[chrom], cfg.seq_len, empirical_noise, cfg.baseline_rec
+            rng,
+            empirical.rec_maps[chrom],
+            cfg.seq_len,
+            empirical_noise,
+            cfg.baseline_rec,
+            start=shared_start,
+            validate_input=False,
         )
         mut_pos, mut_rate, obs_mut_pos, obs_mut_rate, mut_meta = slice_piecewise_map(
-            rng, empirical.mut_maps[chrom], cfg.seq_len, empirical_noise * 0.6, cfg.baseline_mu
+            rng,
+            empirical.mut_maps[chrom],
+            cfg.seq_len,
+            empirical_noise * 0.6,
+            cfg.baseline_mu,
+            start=shared_start,
+            validate_input=False,
         )
         meta.update({
             "map_type": "empirical_slice",
             "map_mode": "empirical_slice",
             "recomb_mode": "empirical_slice",
             "mu_mode": "empirical_slice",
-            "observed_noise_sigma": empirical_noise,
+            "observed_noise_sigma": obs_noise,
+            "slice_alignment": "shared_chromosomal_interval",
+            "slice_chrom": chrom,
+            "slice_start_bp": shared_start,
+            "slice_end_bp": shared_end,
             "rec_slice": rec_meta,
             "mut_slice": mut_meta,
         })

@@ -1,26 +1,62 @@
 from __future__ import annotations
 
+import atexit
+from pathlib import Path
+
 import msprime
 import numpy as np
 
-from .config import Config, DEMO_IDS, SOURCE_IDS, validate_config
+from .config import (
+    DEMOGRAPHY_TYPE_IDS,
+    GENERATOR_RECIPE_IDS,
+    SOURCE_IDS,
+    Config,
+    validate_config,
+)
 from .demography import sample_custom_demography
+from .dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
 from .empirical_maps import EmpiricalMapStore
 from .maps import choose_source, constant_map, make_rate_map, sample_maps_for_source
-from .noise import apply_genotype_noise, pack_haplotypes
-from .stdpopsim_support import try_stdpopsim_sample
-from .utils import rng_from_seed
+from .noise import add_false_variants, apply_genotype_noise, pack_haplotypes
+from .stdpopsim_support import StdpopsimSimulationError, try_stdpopsim_sample
+from .utils import rng_from_seed, time_grid
 
 
 _WORKER_CFG: Config | None = None
 _WORKER_EMPIRICAL: EmpiricalMapStore | None = None
+_WORKER_SHARED_MAP_HANDLES: list | None = None
 
 
-def init_worker(cfg_dict: dict) -> None:
-    global _WORKER_CFG, _WORKER_EMPIRICAL
+def _close_worker_shared_maps() -> None:
+    global _WORKER_EMPIRICAL, _WORKER_SHARED_MAP_HANDLES
+    _WORKER_EMPIRICAL = None
+    if _WORKER_SHARED_MAP_HANDLES:
+        from .shared_maps import release_shared_memory
+
+        release_shared_memory(_WORKER_SHARED_MAP_HANDLES)
+    _WORKER_SHARED_MAP_HANDLES = None
+
+
+atexit.register(_close_worker_shared_maps)
+
+
+def init_worker(
+    cfg_dict: dict,
+    empirical: EmpiricalMapStore | None = None,
+    empirical_shared_spec=None,
+) -> None:
+    global _WORKER_CFG, _WORKER_EMPIRICAL, _WORKER_SHARED_MAP_HANDLES
+    if empirical is not None and empirical_shared_spec is not None:
+        raise ValueError("provide either empirical or empirical_shared_spec, not both")
+    _close_worker_shared_maps()
     _WORKER_CFG = Config(**cfg_dict)
     validate_config(_WORKER_CFG)
-    _WORKER_EMPIRICAL = None
+    if empirical_shared_spec is not None:
+        from .shared_maps import attach_shared_empirical_map_store
+
+        _WORKER_EMPIRICAL, _WORKER_SHARED_MAP_HANDLES = attach_shared_empirical_map_store(empirical_shared_spec)
+    else:
+        _WORKER_EMPIRICAL = empirical
 
 
 def _get_worker_cfg(cfg_dict: dict | None = None) -> Config:
@@ -31,7 +67,6 @@ def _get_worker_cfg(cfg_dict: dict | None = None) -> Config:
         return cfg
     if _WORKER_CFG is None:
         raise RuntimeError("simulator worker was not initialized")
-    validate_config(_WORKER_CFG)
     return _WORKER_CFG
 
 
@@ -87,6 +122,75 @@ def _rate_summary(prefix: str, rates: np.ndarray) -> dict:
         f"{prefix}_rate_min": float(np.min(arr)),
         f"{prefix}_rate_max": float(np.max(arr)),
     }
+
+
+def _reproducible_subset(index: int, fraction: float) -> bool:
+    """Select a row by its index rather than by drawing.
+
+    Drawing would consume the noise stream and make the selection depend on
+    how many rows came before, so two runs that differ only in row count would
+    disagree about which rows carry the extra artefacts.
+    """
+
+    if fraction >= 1.0:
+        return True
+    if fraction <= 0.0:
+        return False
+    return (int(index) * 2_654_435_761) % 1_000_000 < fraction * 1_000_000
+
+
+def genealogy_summary(
+    ts, edges: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pair coalescences and branch length per target time bin.
+
+    Pair coalescences, not node counts.  A coalescence rate is a statement
+    about *pairs* -- two lineages meet at rate 1/(2Ne) per generation -- so
+    counting internal nodes and dividing by branch length is dimensionally
+    wrong, and an oracle built on it comes out at an RMSE of 3.7 against a
+    label that spans four decades.  ``pair_coalescence_counts`` weights each
+    node by how many sample pairs actually coalesce there and by the sequence
+    it holds, which is the quantity PSMC and its descendants estimate.  The
+    counts sum to C(n, 2) -- 2,016 for sixty-four haplotypes -- which is what
+    makes them self-checking.
+
+    From the counts alone the whole trajectory follows: the pairs still
+    uncoalesced entering a bin are the total minus what has already met, so
+    the hazard is ``count / remaining / width`` and Ne is one over twice that.
+    Nothing else needs storing for the rate.
+
+    Branch length is kept beside it because it answers the other question --
+    not how fast lineages met, but how much sequence there was to see it in.
+    A bin can be empty because the population was large or because no lineage
+    was left, and the two look identical in the counts alone.  It comes off
+    the edge table rather than tree by tree: an edge already carries its span
+    and both endpoint times, so the whole calculation is one clipped overlap
+    per bin -- 0.19 seconds on a row whose ancestry simulation took 233.
+    """
+
+    bins = np.asarray(edges, dtype=np.float64)
+    windows = np.concatenate(([0.0], bins, [np.inf]))
+    pair_counts = np.asarray(
+        ts.pair_coalescence_counts(time_windows=windows, span_normalise=True),
+        dtype=np.float64,
+    )[1:-1]
+
+    node_times = ts.tables.nodes.time
+    edge_table = ts.tables.edges
+    child = node_times[edge_table.child]
+    parent = node_times[edge_table.parent]
+    span = np.asarray(edge_table.right, dtype=np.float64) - np.asarray(
+        edge_table.left, dtype=np.float64
+    )
+    exposure = np.empty(bins.size - 1, dtype=np.float64)
+    for index in range(bins.size - 1):
+        overlap = np.clip(
+            np.minimum(parent, bins[index + 1]) - np.maximum(child, bins[index]),
+            0.0,
+            None,
+        )
+        exposure[index] = float((overlap * span).sum())
+    return pair_counts, exposure
 
 
 def simulate_one(task: tuple) -> dict:
@@ -149,7 +253,7 @@ def simulate_one(task: tuple) -> dict:
     G = ts.genotype_matrix()
     if G.shape[0] > 0:
         G = _ensure_haplotype_count(G, cfg.n_haplotypes)
-        positions = np.array([site.position for site in ts.sites()], dtype=np.float64)
+        positions = np.asarray(ts.sites_position, dtype=np.float64)
     else:
         G = np.zeros((0, cfg.n_haplotypes), dtype=np.uint8)
         positions = np.zeros(0, dtype=np.float64)
@@ -157,7 +261,18 @@ def simulate_one(task: tuple) -> dict:
     from .noise import noise_params_for_sample
 
     noise = noise_params_for_sample(rng, cfg, source)
+    # Invented sites go in before the other channels so they are subject to the
+    # same missingness and the same phasing as any other site: a caller does
+    # not know which of its sites are real.
+    G, positions, false_stats = add_false_variants(
+        G,
+        positions,
+        rng,
+        int(ts.sequence_length),
+        float(noise.get("false_variant_rate_per_bp", 0.0)),
+    )
     G_noisy, missing_flat_idx, noise_stats = apply_genotype_noise(G, positions, rng, noise)
+    noise.update(false_stats)
     noise.update(noise_stats)
 
     packed = pack_haplotypes(G_noisy, cfg.n_haplotypes)
@@ -192,9 +307,33 @@ def simulate_one(task: tuple) -> dict:
         **_rate_summary("obs_rec", obs_rec_rate),
         **_rate_summary("obs_mut", obs_mut_rate),
     }
+    demography_type = str(meta.get("demography_type", "stdpopsim"))
+    generator_recipe = str(meta.get("generator_recipe", meta.get("scenario", "stdpopsim")))
+    try:
+        demography_type_id = int(DEMOGRAPHY_TYPE_IDS[demography_type])
+    except KeyError as exc:
+        raise ValueError(f"Unknown public demography type: {demography_type!r}") from exc
+    try:
+        generator_recipe_id = int(GENERATOR_RECIPE_IDS[generator_recipe])
+    except KeyError as exc:
+        raise ValueError(f"Unknown demography generator recipe: {generator_recipe!r}") from exc
+    # Keep the schema-v1/v2 numeric namespace stable for existing consumers.
+    demography_id = generator_recipe_id
+    meta["demography_id"] = demography_id
+    meta["demography_type_id"] = demography_type_id
+    meta["generator_recipe"] = generator_recipe
+    meta["generator_recipe_id"] = generator_recipe_id
+    meta["generator_schema_version"] = SAMPLE_GENERATOR_SCHEMA_VERSION
     meta["scenario_key"] = "|".join(
         [
-            str(meta.get("demography_type", "unknown")),
+            demography_type,
+            str(meta.get("map_mode", meta.get("map_type", "unknown"))),
+            str(meta.get("noise_profile", "unknown")),
+        ]
+    )
+    meta["generator_recipe_key"] = "|".join(
+        [
+            generator_recipe,
             str(meta.get("map_mode", meta.get("map_type", "unknown"))),
             str(meta.get("noise_profile", "unknown")),
         ]
@@ -203,24 +342,85 @@ def simulate_one(task: tuple) -> dict:
     out = {
         "sample_id": sample_id,
         "source_id": SOURCE_IDS.get(source, -1),
-        "demo_id": DEMO_IDS.get(meta.get("demography_type", "stdpopsim"), 9),
+        # ``demo_id`` is retained as an in-process compatibility alias.
+        "demo_id": demography_id,
+        "demography_id": demography_id,
+        "demography_type_id": demography_type_id,
+        "generator_recipe_id": generator_recipe_id,
         "positions": positions_u32,
-        "geno_packed": packed.astype(np.uint8),
+        "geno_packed": packed,
         "missing_flat_idx": missing_flat_idx,
-        "obs_rec_pos": np.asarray(obs_rec_pos, dtype=np.float32),
+        # Positions are float64, rates stay float32.  A float32 cannot hold an
+        # integer above 2**24 = 16,777,216, so on a twenty-megabase row every
+        # map breakpoint past 16.8 Mb rounds to an even base pair -- harmless
+        # against cells that are one to twenty kilobases wide, but a hard wall
+        # the moment the sequence grows: two base pairs at fifty megabases,
+        # eight at a chromosome.  Rates are around 1e-8 and float32 carries
+        # seven significant digits, so the cumulative genetic distance across
+        # twenty thousand cells comes out with a relative error near 1e-7,
+        # nineteen thousand times under the 0.0019 noise floor on the label.
+        "obs_rec_pos": np.asarray(obs_rec_pos, dtype=np.float64),
         "obs_rec_rate": np.asarray(obs_rec_rate, dtype=np.float32),
-        "obs_mut_pos": np.asarray(obs_mut_pos, dtype=np.float32),
+        "obs_mut_pos": np.asarray(obs_mut_pos, dtype=np.float64),
         "obs_mut_rate": np.asarray(obs_mut_rate, dtype=np.float32),
         "target_log10_ne": np.asarray(y, dtype=np.float32),
         "metadata": meta,
     }
+    # Written for a fraction of rows rather than all of them: the true maps
+    # roughly double a sample on disk, and an oracle ablation -- hand the model
+    # the map the data was simulated under and see how much of the gap is map
+    # error rather than map use -- needs statistical power, not every row.
+    # Keyed off the sample index so the subset is reproducible and does not
+    # consume the noise stream.
+    arg_detail = str(getattr(cfg, "arg_detail", "none"))
+    write_genealogy = arg_detail != "none" and _reproducible_subset(
+        index, float(getattr(cfg, "arg_fraction", 1.0))
+    )
+    meta["arg_detail"] = arg_detail if write_genealogy else "none"
+    if arg_detail != "none":
+        # Always present, like the truth maps, so the shard layout does not
+        # depend on which rows were selected.  A row that was not selected
+        # carries zeros and says so in ``arg_detail``.
+        target_edges, _ = time_grid(cfg)
+        if write_genealogy and ts is not None:
+            pair_coalescences, exposure = genealogy_summary(ts, target_edges)
+        else:
+            pair_coalescences = np.zeros(int(cfg.time_bins), dtype=np.float64)
+            exposure = np.zeros(int(cfg.time_bins), dtype=np.float64)
+        out["pair_coalescences_per_bin"] = pair_coalescences.astype(np.float32)
+        out["branch_length_per_bin"] = exposure.astype(np.float32)
+        meta["pair_coalescences_total"] = float(pair_coalescences.sum())
+        # A bin holding fewer than ten pair coalescences cannot support a rate:
+        # this is the same threshold the SMC literature uses for its own time
+        # discretisation.
+        meta["resolvable_bins"] = int((pair_coalescences >= 10).sum())
+        if arg_detail == "full" and write_genealogy and ts is not None:
+            arg_dir = Path(cfg.out_dir) / "samples" / "arg"
+            arg_dir.mkdir(parents=True, exist_ok=True)
+            arg_path = arg_dir / f"{sample_id}.trees"
+            ts.dump(str(arg_path))
+            meta["arg_path"] = str(arg_path.relative_to(Path(cfg.out_dir)))
+        else:
+            meta["arg_path"] = ""
+
+    truth_fraction = float(getattr(cfg, "truth_fraction", 1.0))
+    write_truth = bool(cfg.include_truth) and _reproducible_subset(
+        index, truth_fraction
+    )
+    meta["truth_maps_written"] = write_truth
     if cfg.include_truth:
+        # The fields are always present so the shard layout does not depend on
+        # which rows were selected; a row without truth carries zero-length
+        # arrays, which the ragged offsets already express, and says so in
+        # ``truth_maps_written``.
+        empty = np.zeros(0, dtype=np.float32)
+        empty64 = np.zeros(0, dtype=np.float64)
         out.update(
             {
-                "true_rec_pos": np.asarray(true_rec_pos, dtype=np.float32),
-                "true_rec_rate": np.asarray(true_rec_rate, dtype=np.float32),
-                "true_mut_pos": np.asarray(true_mut_pos, dtype=np.float32),
-                "true_mut_rate": np.asarray(true_mut_rate, dtype=np.float32),
+                "true_rec_pos": np.asarray(true_rec_pos, dtype=np.float64) if write_truth else empty64,
+                "true_rec_rate": np.asarray(true_rec_rate, dtype=np.float32) if write_truth else empty,
+                "true_mut_pos": np.asarray(true_mut_pos, dtype=np.float64) if write_truth else empty64,
+                "true_mut_rate": np.asarray(true_mut_rate, dtype=np.float32) if write_truth else empty,
             }
         )
     return out
@@ -241,6 +441,8 @@ def simulate_one_with_retries(task: tuple) -> dict:
     for attempt in range(cfg.max_retries):
         try:
             return simulate_one(current)
+        except StdpopsimSimulationError:
+            raise
         except Exception as exc:
             last_error = exc
             seed = int(current[1] if len(current) == 2 else current[3])

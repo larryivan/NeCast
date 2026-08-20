@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,88 @@ _STORE_CACHE: dict[str, EmpiricalNeTemplateStore] = {}
 
 def empirical_ne_templates_available(cfg: Config) -> bool:
     return len(load_empirical_ne_templates(cfg).templates) > 0
+
+
+def empirical_ne_template_provenance(
+    cfg: Config,
+    *,
+    include_source_files: bool = True,
+) -> dict:
+    """Fingerprint the exact parsed template curves and their source files."""
+
+    store = load_empirical_ne_templates(cfg)
+    digest = hashlib.sha256()
+    ordered = sorted(
+        store.templates,
+        key=lambda template: (
+            template.source_key,
+            template.method,
+            template.population,
+            template.path,
+        ),
+    )
+
+    def update_text(value: str) -> None:
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "little"))
+        digest.update(encoded)
+
+    for template in ordered:
+        for value in (
+            template.source_key,
+            template.method,
+            template.population,
+            template.time_unit_note,
+        ):
+            update_text(value)
+        for array in (template.generations_ago, template.ne):
+            values = np.asarray(array, dtype="<f8")
+            digest.update(values.size.to_bytes(8, "little"))
+            digest.update(values.tobytes(order="C"))
+
+    files: list[dict[str, int | str]] = []
+    if include_source_files:
+        for raw_path in sorted({template.path for template in ordered}):
+            path = Path(raw_path).expanduser().resolve(strict=True)
+            before = path.stat()
+            file_digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    file_digest.update(chunk)
+            after = path.stat()
+            before_identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            )
+            after_identity = (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            )
+            if before_identity != after_identity:
+                raise ValueError(
+                    "Empirical Ne template changed while recording provenance: "
+                    f"{path}"
+                )
+            files.append(
+                {
+                    "path": str(path),
+                    "source_size_bytes": int(after.st_size),
+                    "source_sha256": file_digest.hexdigest(),
+                }
+            )
+    return {
+        "n_templates": len(ordered),
+        "source_counts": {
+            str(key): int(value)
+            for key, value in sorted(store.source_counts.items())
+        },
+        "parsed_templates_sha256": digest.hexdigest(),
+        "source_files": files,
+    }
 
 
 def load_empirical_ne_templates(cfg: Config) -> EmpiricalNeTemplateStore:

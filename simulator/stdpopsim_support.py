@@ -166,7 +166,6 @@ def try_stdpopsim_sample(
             "scenario": "stdpopsim",
             "generator_recipe": "stdpopsim",
             "generator_recipe_id": GENERATOR_RECIPE_IDS["stdpopsim"],
-            "demography_id": GENERATOR_RECIPE_IDS["stdpopsim"],
             "demography_type": "stdpopsim",
             "demography_type_id": DEMOGRAPHY_TYPE_IDS["stdpopsim"],
             "demography_mixture_version": cfg.demography_mixture_version,

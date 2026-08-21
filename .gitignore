@@ -101,3 +101,4 @@ maps/**/script/__pycache__/
 !maps/**/output/
 !maps/**/output/**/*.bed
 !maps/**/*.md
+dlcoalsim.egg-info/

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from .config import (
     DEMOGRAPHY_TYPE_IDS,
-    DEMO_IDS,
     GENERATOR_RECIPE_IDS,
     SOURCE_IDS,
     Config,
@@ -50,8 +49,7 @@ Shard files are written as lossless NPZ archives using the configured DEFLATE
 level. Missing genotypes are stored as sparse per-sample row-major indices
 (`missing_flat_idx`, `missing_offsets`) rather than as a dense missing matrix.
 Each sample stores a merged scientific `demography_type_id` and an append-only
-`generator_recipe_id`. The legacy `demography_id` remains an exact alias of
-`generator_recipe_id`, preserving its historical numeric namespace. Decode IDs
+`generator_recipe_id`.
 with the mappings in `config.json` or `manifest.json`.
 
 Targets are log-time bin averages, not midpoint samples. This keeps short
@@ -91,7 +89,7 @@ into interpretable scientific classes such as `constant`, `bottleneck`,
 `Ne_ratio_max_min`, `recent_min_Ne`, `ancient_mean_Ne`, `event_severity`, and
 `event_duration` for filtering and benchmark recipes. `event_severity` is
 uniformly `min_Ne / max_Ne`; any recipe-specific legacy definition is preserved
-as `recipe_event_severity`. Shape descriptors include `log10_ne_range`,
+Shape descriptors include `log10_ne_range`,
 `total_variation_log10`, `turn_count`, `direction`, and `trajectory_form`.
 Sample quality metadata includes `variant_density_per_mb`, explicit noise rates,
 missing genotype counts, phase switch counts, and observed map rate summaries
@@ -239,7 +237,6 @@ class DLCoalSimShard:
         sample = {
             "sample_id": str(self.data["sample_id"][i]),
             "source_id": int(self.data["source_id"][i]),
-            "demography_id": int(self.data["demography_id"][i]),
             "demography_type_id": int(self.data["demography_type_id"][i]),
             "generator_recipe_id": int(self.data["generator_recipe_id"][i]),
             "generator_schema_version": self.generator_schema_version,
@@ -381,7 +378,6 @@ def show_metadata_card(sample):
         "generator_recipe_id",
         "demography_type",
         "demography_type_id",
-        "demography_id",
         "history_family",
         "trajectory_form",
         "curve_origin",
@@ -400,7 +396,6 @@ def show_metadata_card(sample):
         "max_Ne",
         "Ne_ratio_max_min",
         "event_severity",
-        "recipe_event_severity",
         "event_duration",
         "log10_ne_range",
         "total_variation_log10",
@@ -623,9 +618,6 @@ def validate_dataset(data_dir):
             assert sample["generator_recipe_id"] == int(
                 generator_recipe_ids[generator_recipe]
             ), "generator recipe ID/string mismatch"
-            assert sample["demography_id"] == sample["generator_recipe_id"], (
-                "legacy demography_id/generator_recipe_id mismatch"
-            )
             assert sample["sequence_length"] > 0, "sample sequence_length must be positive"
             _check_monotone("variant", sample["positions_bp"])
             _check_monotone("observed recombination", sample["observed_recombination"]["position_bp"])
@@ -830,7 +822,6 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
     config_dict["demography_generation_time_edges"] = generation_edges.tolist()
     config_dict["demography_generation_time_mids"] = generation_mids.tolist()
     config_dict["source_ids"] = SOURCE_IDS
-    config_dict["demography_ids"] = DEMO_IDS
     config_dict["demography_type_ids"] = DEMOGRAPHY_TYPE_IDS
     config_dict["generator_recipe_ids"] = GENERATOR_RECIPE_IDS
     config_dict["generator_schema_version"] = SAMPLE_GENERATOR_SCHEMA_VERSION
@@ -850,7 +841,6 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
         "demography_generation_time_edges": generation_edges.tolist(),
         "demography_generation_time_mids": generation_mids.tolist(),
         "source_ids": SOURCE_IDS,
-        "demography_ids": DEMO_IDS,
         "demography_type_ids": DEMOGRAPHY_TYPE_IDS,
         "generator_recipe_ids": GENERATOR_RECIPE_IDS,
         "generator_schema_version": SAMPLE_GENERATOR_SCHEMA_VERSION,

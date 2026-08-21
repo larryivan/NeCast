@@ -34,15 +34,6 @@ def make_rate_map(pos: np.ndarray, rates: np.ndarray) -> msprime.RateMap:
     return msprime.RateMap(position=pos, rate=rates)
 
 
-def _segment_range(cfg: Config, is_mut: bool) -> tuple[int, int]:
-    lo = max(1, cfg.map_segments_min)
-    hi = max(lo, cfg.map_segments_max)
-    if is_mut:
-        lo = max(16, lo // 2)
-        hi = max(lo, hi // 2)
-    return lo, hi
-
-
 def _sample_bp_width(rng: np.random.Generator, length: int, lo: float, hi: float) -> float:
     upper = max(1.0, min(float(hi), float(length)))
     lower = max(1.0, min(float(lo), upper))

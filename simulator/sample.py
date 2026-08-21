@@ -319,7 +319,6 @@ def simulate_one(task: tuple) -> dict:
         raise ValueError(f"Unknown demography generator recipe: {generator_recipe!r}") from exc
     # Keep the schema-v1/v2 numeric namespace stable for existing consumers.
     demography_id = generator_recipe_id
-    meta["demography_id"] = demography_id
     meta["demography_type_id"] = demography_type_id
     meta["generator_recipe"] = generator_recipe
     meta["generator_recipe_id"] = generator_recipe_id
@@ -342,9 +341,6 @@ def simulate_one(task: tuple) -> dict:
     out = {
         "sample_id": sample_id,
         "source_id": SOURCE_IDS.get(source, -1),
-        # ``demo_id`` is retained as an in-process compatibility alias.
-        "demo_id": demography_id,
-        "demography_id": demography_id,
         "demography_type_id": demography_type_id,
         "generator_recipe_id": generator_recipe_id,
         "positions": positions_u32,

@@ -15,7 +15,6 @@ from scripts.dataset_admin import check_shard
 from simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     DEMOGRAPHY_TYPE_IDS,
-    DEMO_IDS,
     GENERATOR_RECIPE_IDS,
     Config,
     validate_config,
@@ -182,19 +181,11 @@ def test_compute_chunks_and_worker_count_are_lossless(tmp_path: Path) -> None:
         for shard_path in sorted((dataset / "samples").glob("shard_*.npz")):
             assert len(check_shard(shard_path)) == 2
             with np.load(shard_path, allow_pickle=False) as data:
-                assert data["demography_id"].dtype == np.int16
                 assert data["demography_type_id"].dtype == np.int16
                 assert data["generator_recipe_id"].dtype == np.int16
                 np.testing.assert_array_equal(
                     data["generator_schema_version"],
                     np.array([SAMPLE_GENERATOR_SCHEMA_VERSION], dtype=np.int16),
-                )
-                np.testing.assert_array_equal(
-                    data["demography_id"],
-                    np.full(
-                        len(data["sample_id"]),
-                        GENERATOR_RECIPE_IDS["constant"],
-                    ),
                 )
                 np.testing.assert_array_equal(
                     data["demography_type_id"],
@@ -220,9 +211,6 @@ def test_compute_chunks_and_worker_count_are_lossless(tmp_path: Path) -> None:
             rows = list(csv.DictReader(handle))
         assert {row["demography_type"] for row in rows} == {"constant"}
         assert {row["generator_recipe"] for row in rows} == {"constant"}
-        assert {int(row["demography_id"]) for row in rows} == {
-            GENERATOR_RECIPE_IDS["constant"]
-        }
         assert {int(row["demography_type_id"]) for row in rows} == {
             DEMOGRAPHY_TYPE_IDS["constant"]
         }
@@ -236,7 +224,6 @@ def test_compute_chunks_and_worker_count_are_lossless(tmp_path: Path) -> None:
     config_json = json.loads((baseline_dir / "config.json").read_text(encoding="utf-8"))
     manifest_json = json.loads((baseline_dir / "manifest.json").read_text(encoding="utf-8"))
     for payload in (config_json, manifest_json):
-        assert payload["demography_ids"] == DEMO_IDS
         assert payload["demography_type_ids"] == DEMOGRAPHY_TYPE_IDS
         assert payload["generator_recipe_ids"] == GENERATOR_RECIPE_IDS
         assert (

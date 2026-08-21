@@ -22,7 +22,7 @@ import dataclasses
 import numpy as np
 import pytest
 
-from simulator.config import NE_LOG10_BOUNDS, RETIRED_GENERATOR_RECIPES, Config
+from simulator.config import NE_LOG10_BOUNDS, Config
 from simulator.demography import (
     DEMO_PROB_FIELDS,
     SPECTRAL_RANGE_CAP,
@@ -282,13 +282,7 @@ def test_every_value_stays_inside_the_declared_effective_size_band() -> None:
         assert float(np.max(target)) <= NE_LOG10_BOUNDS[1] + 1e-9
 
 
-def test_the_retired_samplers_are_gone_but_still_decode() -> None:
-    from simulator.config import GENERATOR_RECIPE_IDS
-    from simulator.demography import DEMO_SAMPLERS
-
-    for name in RETIRED_GENERATOR_RECIPES:
-        assert name in GENERATOR_RECIPE_IDS
-        assert name not in DEMO_SAMPLERS
+def test_the_spectral_walk_carries_the_background(): 
     assert Config().p_spectral_walk == pytest.approx(0.20)
 
 

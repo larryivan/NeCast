@@ -13,200 +13,64 @@ SOURCE_IDS = {
     "empirical_map_slice": 3,
     "stdpopsim_anchor": 4,
 }
-ID_TO_SOURCE = {v: k for k, v in SOURCE_IDS.items()}
 
 DEMOGRAPHY_TYPE_IDS = {
+    # The public, scientific label for a row, coarser than the recipe that drew
+    # it.  Four labels went when their recipes did -- exponential growth and
+    # decline, three-epoch and serial founder are all things the continuous
+    # event samplers produce, and which of them a row *is* depends on the
+    # trajectory rather than on which sampler ran, so it is resolved per row.
     "constant": 0,
     "random_walk": 1,
     "bottleneck": 2,
-    "exponential_growth": 3,
-    "exponential_decline": 4,
-    "expansion": 5,
-    "contraction": 6,
-    "three_epoch": 7,
-    "serial_founder": 8,
-    "zigzag": 9,
-    "empirical_human_ne_template": 10,
-    "stdpopsim": 11,
+    "expansion": 3,
+    "contraction": 4,
+    "zigzag": 5,
+    "empirical_human_ne_template": 6,
+    "stdpopsim": 7,
 }
 ID_TO_DEMOGRAPHY_TYPE = {v: k for k, v in DEMOGRAPHY_TYPE_IDS.items()}
 
 # Append-only recipe IDs preserve the exact generator provenance used by older
 # datasets, where these values were stored as ``demography_id``.
 GENERATOR_RECIPE_IDS = {
-    "smooth_random_walk": 0,
-    "single_bottleneck": 1,
-    "recent_bottleneck": 2,
-    "expansion": 3,
-    "contraction": 4,
-    "three_epoch": 5,
-    "zigzag": 6,
-    "ancient_event": 7,
-    "constant": 8,
-    "stdpopsim": 9,
-    "near_constant": 10,
-    "continuous_exponential_growth": 11,
-    "continuous_exponential_decline": 12,
-    "recent_founder_recovery": 13,
-    "serial_founder": 14,
-    "ancient_recent_compound": 15,
-    "oscillating_mild": 16,
-    "zigzag_strong": 17,
-    "smooth_random_walk_stress": 18,
-    "recent_bottleneck_extreme": 19,
-    "founder_recovery_extreme": 20,
-    "rapid_recent_growth_extreme": 21,
-    "serial_founder_extreme": 22,
-    "ancient_recent_conflict": 23,
-    "dense_random_walk": 24,
-    "dense_multiscale_random_walk": 25,
-    "dense_recent_wiggle": 26,
-    "dense_random_walk_stress": 27,
-    "classic_sawtooth": 28,
-    "empirical_human_ne_template": 29,
-    "ultra_stress": 30,
-    "canonical_zigzag_1s14": 31,
-    "canonical_smcpp_sawtooth": 32,
-    # The four random walks above -- 0, 24, 25 and 26 -- were retired in
-    # favour of this one.  Their ids stay so older datasets still decode.
-    "spectral_walk": 33,
-    "size_event": 34,
-    "multi_event": 35,
-    "exponential": 36,
-    "sawtooth": 37,
-    "ooa_chain": 38,
-    "stdpopsim_single_pop": 39,
-    "literature_sawtooth": 40,
-    "bottleneck": 41,
-    "event_on_background": 42,
+    # The recipe a row was drawn from.  Ids are dense and start at zero: they
+    # name a sampler in this generator, not a position in its history, and a
+    # dataset written before a change is refused by its schema version long
+    # before any id is read.
+    "constant": 0,
+    "spectral_walk": 1,
+    "size_event": 2,
+    "bottleneck": 3,
+    "multi_event": 4,
+    "event_on_background": 5,
+    "ooa_chain": 6,
+    "exponential": 7,
+    "sawtooth": 8,
+    "literature_sawtooth": 9,
+    "empirical_human_ne_template": 10,
+    "stdpopsim_single_pop": 11,
+    "stdpopsim": 12,
 }
 ID_TO_GENERATOR_RECIPE = {v: k for k, v in GENERATOR_RECIPE_IDS.items()}
-
-# Recipes that no longer have a sampler.  Their ids and public types stay in
-# the tables above so a dataset written before they were retired still decodes;
-# naming them here keeps the "every recipe has a sampler" invariant checkable
-# instead of merely relaxed.
-RETIRED_GENERATOR_RECIPES = frozenset(
-    {
-        # Replaced by ``spectral_walk``.  Between them the four random walks
-        # covered two corners of the (roughness x amplitude) plane and left a
-        # hole at the human anchor's own roughness; the two stress walks
-        # differed from each other only in roughness, the same axis.
-        "smooth_random_walk",
-        "dense_random_walk",
-        "dense_multiscale_random_walk",
-        "dense_recent_wiggle",
-        "smooth_random_walk_stress",
-        "dense_random_walk_stress",
-        "near_constant",
-        # Replaced by ``size_event``.  All eight were one size change at one
-        # time of one depth settling at one level, pinned to different corners
-        # of that space; pairwise separability ran from 0.619 to 0.786 against
-        # a 0.500 chance rate.
-        "recent_bottleneck",
-        "single_bottleneck",
-        "recent_founder_recovery",
-        "recent_bottleneck_extreme",
-        "founder_recovery_extreme",
-        "expansion",
-        "contraction",
-        "ancient_event",
-        # Replaced by ``multi_event``: a run of events with independent signs
-        # produces the conflict and serial-founder cases without naming them.
-        "three_epoch",
-        "ancient_recent_compound",
-        "ancient_recent_conflict",
-        "serial_founder",
-        "serial_founder_extreme",
-        # Replaced by ``exponential`` with a signed rate.
-        "continuous_exponential_growth",
-        "continuous_exponential_decline",
-        "rapid_recent_growth_extreme",
-        # Replaced by ``sawtooth`` with a continuous strength.  ``zigzag`` was
-        # a bit-identical alias of ``zigzag_strong`` on every seed tested.
-        "oscillating_mild",
-        "zigzag_strong",
-        "zigzag",
-        # Superseded by ``literature_sawtooth``, which perturbs every
-        # breakpoint and every half cycle rather than scaling the whole
-        # published ladder by three scalars.
-        "classic_sawtooth",
-        # Three encodings of Zigzag_1S14 is two too many.  The hand-written
-        # table keeps its recipe and the catalogue excludes the model in
-        # return; this one, the scrm command from the SMC++ paper, differs
-        # from it only by publication rounding and stays in the code purely as
-        # the second source the first is checked against.
-        "canonical_smcpp_sawtooth",
-        # Had a recipe of its own for a while, to put many replicates of one
-        # published trajectory in the data.  The catalogue holds the model and
-        # gives it the same treatment as the other seventeen.
-        "canonical_zigzag_1s14",
-        # Dropped outright: a mixture-of-modes sampler overlaps every other
-        # recipe by construction, scoring 0.673 to 0.848 against five of them.
-        "ultra_stress",
-    }
-)
-# Preserve the original API and numeric namespace: ``DEMO_IDS`` and
-# ``demography_id`` remain aliases for the fine-grained generator recipe.
-DEMO_IDS = GENERATOR_RECIPE_IDS
-ID_TO_DEMO = ID_TO_GENERATOR_RECIPE
-
 # ``None`` marks recipes whose public type depends on the sampled trajectory.
 GENERATOR_RECIPE_TO_DEMOGRAPHY_TYPE: dict[str, str | None] = {
+    # ``None`` marks a recipe whose public label is a property of the drawn
+    # trajectory rather than of the sampler: a size change is an expansion or a
+    # contraction depending on its sign.
     "constant": "constant",
-    "near_constant": "random_walk",
-    "smooth_random_walk": "random_walk",
-    "dense_random_walk": "random_walk",
-    "dense_multiscale_random_walk": "random_walk",
-    "dense_recent_wiggle": "random_walk",
     "spectral_walk": "random_walk",
-    # Direction depends on the drawn trajectory, so it is resolved per row.
     "size_event": None,
+    "bottleneck": "bottleneck",
     "multi_event": None,
+    "event_on_background": None,
+    "ooa_chain": "bottleneck",
     "exponential": None,
     "sawtooth": "zigzag",
     "literature_sawtooth": "zigzag",
-    "bottleneck": "bottleneck",
-    # Direction depends on the drawn events.
-    "event_on_background": None,
-    "ooa_chain": "bottleneck",
-    "stdpopsim_single_pop": "stdpopsim",
-    "smooth_random_walk_stress": "random_walk",
-    "dense_random_walk_stress": "random_walk",
-    "single_bottleneck": "bottleneck",
-    "recent_bottleneck": "bottleneck",
-    "recent_bottleneck_extreme": "bottleneck",
-    "recent_founder_recovery": "bottleneck",
-    "founder_recovery_extreme": "bottleneck",
-    "continuous_exponential_growth": "exponential_growth",
-    "rapid_recent_growth_extreme": "exponential_growth",
-    "continuous_exponential_decline": "exponential_decline",
-    "expansion": "expansion",
-    "contraction": "contraction",
-    "three_epoch": "three_epoch",
-    "ancient_recent_compound": "three_epoch",
-    "ancient_recent_conflict": "three_epoch",
-    "serial_founder": "serial_founder",
-    "serial_founder_extreme": "serial_founder",
-    "classic_sawtooth": "zigzag",
-    "canonical_zigzag_1s14": "zigzag",
-    "canonical_smcpp_sawtooth": "zigzag",
-    "oscillating_mild": "zigzag",
-    "zigzag_strong": "zigzag",
-    "zigzag": "zigzag",
     "empirical_human_ne_template": "empirical_human_ne_template",
+    "stdpopsim_single_pop": "stdpopsim",
     "stdpopsim": "stdpopsim",
-    "ancient_event": None,
-    "ultra_stress": None,
-}
-
-ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE = {
-    "ultra_random_walk": "random_walk",
-    "ultra_recent_bottleneck": "bottleneck",
-    "ultra_founder_recovery": "bottleneck",
-    "ultra_rapid_recent_growth": "exponential_growth",
-    "ultra_serial_founder": "serial_founder",
-    "ultra_ancient_recent_conflict": "three_epoch",
 }
 
 HISTORY_FAMILY_BY_DEMOGRAPHY_TYPE = {
@@ -235,9 +99,10 @@ GENERATOR_RECIPE_HISTORY_FAMILY_OVERRIDES = {
 # at the scale that breaks haplotype tracts -- its crossover column is this
 # same map re-binned.  Kept beside it for the megabase-scale non-crossover
 # information, which is a different quantity.
-DEFAULT_RECOMB_MAP = "maps/recomb_map/output/decode2019_avg_hg38.bed"
-LEGACY_RECOMB_MAP = "maps/recomb_map/output/palsson_2025_autosomes_hg38.bed"
-DEFAULT_MUT_MAP = "maps/mut_map/output/roulette_2023_autosomes_hg38_1000bp.bed"
+# Paths are resolved against ``simulator/assets`` first and the working
+# directory second, so an installed copy finds its own data from anywhere.
+DEFAULT_RECOMB_MAP = "maps/decode2019_avg_hg38.bed"
+DEFAULT_MUT_MAP = "maps/roulette_2023_autosomes_hg38_1000bp.bed"
 
 SOURCE_PROB_FIELDS = (
     "p_clean_constant",
@@ -404,9 +269,9 @@ class Config:
     p_stdpopsim_single_pop: float = 0.024
 
 
-    empirical_ne_template_dir: str = "data/templates/human_ne"
+    empirical_ne_template_dir: str = "templates/human_ne"
     stdpopsim_template_path: str = (
-        "data/templates/stdpopsim_single_pop/trajectories.csv"
+        "templates/stdpopsim_single_pop/trajectories.csv"
     )
     empirical_ne_template_source_mix: str = "smcpp_1kg:0.25,phlash_unified:0.60,phlash_super:0.10,msmc2_example:0.04,msmc_im_example:0.01"
     # The templates are 191 curves whose levels all sit within about half a

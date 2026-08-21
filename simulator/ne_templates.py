@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .assets import asset_path
 from .config import Config
 
 
@@ -197,11 +198,7 @@ def load_empirical_ne_templates(cfg: Config) -> EmpiricalNeTemplateStore:
 
 
 def _resolve_template_dir(path: str) -> Path:
-    root = Path(path).expanduser()
-    if root.is_absolute() or root.exists():
-        return root
-    repo_relative = Path(__file__).resolve().parents[1] / root
-    return repo_relative if repo_relative.exists() else root
+    return asset_path(path)
 
 
 def _parse_source_mix(text: str) -> dict[str, float]:

@@ -223,7 +223,6 @@ def concat_with_offsets(arrs: list[np.ndarray], dtype=None) -> tuple[np.ndarray,
 _PER_SAMPLE_ARRAYS = (
     "sample_id",
     "source_id",
-    "demography_id",
     "demography_type_id",
     "generator_recipe_id",
     "target_log10_ne",
@@ -250,7 +249,6 @@ _OFFSET_ARRAY_PAIRS = (
 _BASE_ARRAY_ORDER = (
     "sample_id",
     "source_id",
-    "demography_id",
     "demography_type_id",
     "generator_recipe_id",
     "target_log10_ne",
@@ -301,7 +299,6 @@ _FINAL_RECEIPT_DIRNAME = ".receipts"
 def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
     ids = np.array([s["sample_id"] for s in samples], dtype="U64")
     source_ids = np.array([s["source_id"] for s in samples], dtype=np.int16)
-    demo_ids = np.array([s["demo_id"] for s in samples], dtype=np.int16)
     demography_type_ids = np.array(
         [s["demography_type_id"] for s in samples],
         dtype=np.int16,
@@ -328,7 +325,6 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
     arrays = dict(
         sample_id=ids,
         source_id=source_ids,
-        demography_id=demo_ids,
         demography_type_id=demography_type_ids,
         generator_recipe_id=generator_recipe_ids,
         target_log10_ne=y,
@@ -1205,7 +1201,6 @@ def _metadata_row(meta: dict) -> dict:
         "generator_schema_version": meta.get("generator_schema_version", -1),
         "demography_type": meta.get("demography_type", ""),
         "demography_type_id": meta.get("demography_type_id", -1),
-        "demography_id": meta.get("demography_id", -1),
         "history_family": meta.get("history_family", ""),
         "demography_mixture_version": meta.get("demography_mixture_version", ""),
         "demography_function": meta.get("demography_function", "piecewise_constant"),
@@ -1235,7 +1230,6 @@ def _metadata_row(meta: dict) -> dict:
         "recent_min_Ne": meta.get("recent_min_Ne", 0.0),
         "ancient_mean_Ne": meta.get("ancient_mean_Ne", 0.0),
         "event_severity": meta.get("event_severity", 0.0),
-        "recipe_event_severity": meta.get("recipe_event_severity", None),
         "event_duration": meta.get("event_duration", 0.0),
         "log10_ne_range": meta.get("log10_ne_range", 0.0),
         "total_variation_log10": meta.get("total_variation_log10", 0.0),
@@ -1351,51 +1345,6 @@ def _metadata_row(meta: dict) -> dict:
     }
 
 
-def _write_metadata(
-    metadata_rows: list[dict],
-    shard_paths: list[str],
-    out_dir: Path,
-    cfg: Config,
-) -> dict:
-    meta_dir = out_dir / "metadata"
-    meta_dir.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(metadata_rows)
-    csv_path = meta_dir / "samples.csv"
-    csv_tmp = csv_path.with_name(f"{csv_path.name}.tmp")
-    df.to_csv(csv_tmp, index=False)
-    csv_tmp.replace(csv_path)
-    paths = {
-        "summary_csv": "metadata/samples.csv",
-        "full_jsonl_gz": "metadata/samples.jsonl.gz",
-    }
-    parquet_path = meta_dir / "samples.parquet"
-    parquet_tmp = parquet_path.with_name(f"{parquet_path.name}.tmp")
-    try:
-        df.to_parquet(parquet_tmp, index=False)
-        parquet_tmp.replace(parquet_path)
-        paths["summary_parquet"] = "metadata/samples.parquet"
-    except Exception:
-        if parquet_tmp.exists():
-            parquet_tmp.unlink()
-
-    full_path = meta_dir / "samples.jsonl.gz"
-    full_tmp = full_path.with_name(f"{full_path.name}.tmp")
-    metadata_count = _stream_gzip_members(
-        [
-            (out_dir / relative_path).with_suffix(".jsonl.gz")
-            for relative_path in shard_paths
-        ],
-        full_tmp,
-        compression_level=cfg.compression_level,
-    )
-    if metadata_count != len(metadata_rows):
-        raise RuntimeError(
-            f"aggregate metadata contains {metadata_count} rows, "
-            f"expected {len(metadata_rows)}"
-        )
-    full_tmp.replace(full_path)
-    return paths
-
 
 def _load_json_object(path: Path, description: str) -> dict:
     try:
@@ -1492,7 +1441,6 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
     required_arrays = {
         "sample_id",
         "source_id",
-        "demography_id",
         "demography_type_id",
         "generator_recipe_id",
         "generator_schema_version",
@@ -1550,7 +1498,6 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                     raise ValueError("sample IDs do not match the shard range")
                 for id_key in (
                     "source_id",
-                    "demography_id",
                     "demography_type_id",
                     "generator_recipe_id",
                 ):
@@ -1562,7 +1509,6 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                         )
                 valid_ids = {
                     "source_id": set(SOURCE_IDS.values()),
-                    "demography_id": set(GENERATOR_RECIPE_IDS.values()),
                     "demography_type_id": set(DEMOGRAPHY_TYPE_IDS.values()),
                     "generator_recipe_id": set(GENERATOR_RECIPE_IDS.values()),
                 }
@@ -1573,13 +1519,6 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                         data[id_key],
                         dtype=np.int64,
                     ).tolist()
-                if not np.array_equal(
-                    np.asarray(data["demography_id"]),
-                    np.asarray(data["generator_recipe_id"]),
-                ):
-                    raise ValueError(
-                        "legacy demography_id does not match generator_recipe_id"
-                    )
                 schema_version = np.asarray(
                     data["generator_schema_version"],
                 ).reshape(-1)
@@ -1645,7 +1584,6 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                     )
                 for id_key in (
                     "source_id",
-                    "demography_id",
                     "demography_type_id",
                     "generator_recipe_id",
                 ):

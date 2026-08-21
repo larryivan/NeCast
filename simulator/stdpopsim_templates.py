@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .assets import asset_path
 from .config import NE_LOG10_BOUNDS, Config
 
 
@@ -75,7 +76,7 @@ def _fit_to_bounds(values: tuple[float, ...]) -> float:
 
 @lru_cache(maxsize=4)
 def _load(path: str) -> tuple[StdpopsimTemplate, ...]:
-    source = Path(path)
+    source = asset_path(path)
     if not source.exists():
         return ()
     grouped: dict[tuple[str, str], list[dict[str, str]]] = {}

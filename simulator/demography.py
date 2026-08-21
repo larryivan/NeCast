@@ -12,7 +12,6 @@ from .config import (
     NE_BOUNDS,
     NE_LOG10_BOUNDS,
     NE_LOG10_STRESS_BOUNDS,
-    ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE,
     NE_STRESS_BOUNDS,
     GENERATOR_RECIPE_IDS,
     GENERATOR_RECIPE_HISTORY_FAMILY_OVERRIDES,
@@ -37,8 +36,6 @@ from .utils import (
 SamplerResult = tuple[list[float], list[float], dict]
 DemoSampler = Callable[[np.random.Generator, Config, np.ndarray, np.ndarray], SamplerResult]
 
-STRESS_NE_CAP = 500_000.0
-ULTRA_STRESS_NE_CAP = 1_000_000.0
 
 # Where a recipe puts the trajectory as a whole, in log10 effective size.
 #
@@ -57,17 +54,11 @@ LEVEL_LOG10_RANGE = (2.4, 5.6)
 LEVEL_NE_RANGE = (10.0 ** LEVEL_LOG10_RANGE[0], 10.0 ** LEVEL_LOG10_RANGE[1])
 
 # Recipes whose public type depends on the trajectory they happened to draw.
-# ``ancient_event`` is retired but stays here: a dataset written before it was
-# retired still has to resolve, and its type was always a property of the drawn
-# trajectory rather than of the sampler.
+# A recipe whose public label is a property of the drawn trajectory: whether a
+# run of size changes adds up to an expansion or a contraction is not
+# something the sampler decides.
 _DYNAMIC_DIRECTION_RECIPES = frozenset(
-    {
-        "size_event",
-        "multi_event",
-        "exponential",
-        "event_on_background",
-        "ancient_event",
-    }
+    {"size_event", "multi_event", "exponential", "event_on_background"}
 )
 
 
@@ -166,13 +157,6 @@ def resolve_demography_type(
     meta: dict,
 ) -> str:
     """Map a fine-grained generator recipe to its public scientific type."""
-    if generator_recipe == "ultra_stress":
-        # Retired, but old datasets still decode through here.
-        stress_type = str(meta.get("stress_type", ""))
-        try:
-            return ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE[stress_type]
-        except KeyError as exc:
-            raise ValueError(f"Unknown ultra-stress recipe subtype: {stress_type!r}") from exc
     if generator_recipe in _DYNAMIC_DIRECTION_RECIPES:
         # These have no fixed public type: whether a run of events adds up to
         # an expansion, a contraction or neither is a property of the drawn
@@ -324,16 +308,11 @@ def summarize_demography(
     # once, for every recipe.  It used to be computable here and also
     # overridable by the sampler, and five samplers took the override under
     # three different conventions: bottleneck-over-present in three of them,
-    # founder-over-ancient in a fourth, founder-over-present in a fifth.  Worse,
-    # they wrote the value they drew rather than the one they realised, so
-    # wherever the effective size hit its floor the number was wrong -- 37% of
-    # ``recent_bottleneck_extreme`` rows, at a declared median depth of 0.0032
-    # against a realised 0.0076.  No sampler overrides it now.
-    # ``recipe_event_severity`` stays in the row so datasets that carry the old
-    # value still read back; it is None for everything this generator writes.
-    recipe_severity = meta.get("event_severity")
-    if recipe_severity is not None:
-        recipe_severity = float(recipe_severity)
+    # founder-over-ancient in a fourth, founder-over-present in a fifth.
+    # Worse, they wrote the value they drew rather than the one they realised,
+    # so wherever the effective size hit its floor the number was wrong -- 37%
+    # of ``recent_bottleneck_extreme`` rows, at a declared median depth of
+    # 0.0032 against a realised 0.0076.
     severity = float(min_ne / max(max_ne, 1.0))
     has_recent = bool(meta.get("has_recent_event", any(float(t) <= 5_000.0 for t in breaks)))
     has_ancient = bool(meta.get("has_ancient_event", any(float(t) >= 50_000.0 for t in breaks)))
@@ -366,7 +345,6 @@ def summarize_demography(
         "recent_min_Ne": float(np.min(recent_ne)),
         "ancient_mean_Ne": float(np.mean(ancient_ne)),
         "event_severity": severity,
-        "recipe_event_severity": recipe_severity,
         "event_duration": event_duration,
         "log10_ne_range": log10_ne_range,
         "total_variation_log10": total_variation_log10,
@@ -1526,11 +1504,6 @@ def choose_generator_recipe(rng: np.random.Generator, cfg: Config) -> str:
     return str(rng.choice(choices, p=p / p.sum()))
 
 
-def choose_demo_type(rng: np.random.Generator, cfg: Config) -> str:
-    """Compatibility alias for the pre-v3 recipe-selection API."""
-    return choose_generator_recipe(rng, cfg)
-
-
 def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msprime.Demography, np.ndarray, dict]:
     target_edges, _ = time_grid(cfg)
     generation_edges, generation_mids = demography_generation_grid(cfg)
@@ -1576,7 +1549,6 @@ def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msp
         "scenario": generator_recipe,
         "generator_recipe": generator_recipe,
         "generator_recipe_id": GENERATOR_RECIPE_IDS[generator_recipe],
-        "demography_id": GENERATOR_RECIPE_IDS[generator_recipe],
         "demography_type": demography_type,
         "demography_type_id": DEMOGRAPHY_TYPE_IDS[demography_type],
         "demography_mixture_version": cfg.demography_mixture_version,

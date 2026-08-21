@@ -10,17 +10,13 @@ import numpy as np
 import pytest
 
 from simulator.config import (
-    RETIRED_GENERATOR_RECIPES,
     DEMOGRAPHY_PROB_FIELDS,
     DEMOGRAPHY_TYPE_IDS,
-    DEMO_IDS,
     GENERATOR_RECIPE_IDS,
     GENERATOR_RECIPE_TO_DEMOGRAPHY_TYPE,
     ID_TO_DEMOGRAPHY_TYPE,
-    ID_TO_DEMO,
     ID_TO_GENERATOR_RECIPE,
     SOURCE_PROB_FIELDS,
-    ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE,
     Config,
 )
 from simulator.demography import (
@@ -56,40 +52,12 @@ def _only_demography(name: str, *, time_bins: int = 48) -> Config:
 
 EXPECTED_STATIC_RECIPE_TYPES = {
     "constant": "constant",
-    "near_constant": "random_walk",
-    "smooth_random_walk": "random_walk",
-    "dense_random_walk": "random_walk",
-    "dense_multiscale_random_walk": "random_walk",
-    "dense_recent_wiggle": "random_walk",
     "spectral_walk": "random_walk",
-    "smooth_random_walk_stress": "random_walk",
-    "dense_random_walk_stress": "random_walk",
-    "single_bottleneck": "bottleneck",
-    "recent_bottleneck": "bottleneck",
-    "recent_bottleneck_extreme": "bottleneck",
-    "recent_founder_recovery": "bottleneck",
-    "founder_recovery_extreme": "bottleneck",
-    "continuous_exponential_growth": "exponential_growth",
-    "rapid_recent_growth_extreme": "exponential_growth",
-    "continuous_exponential_decline": "exponential_decline",
-    "expansion": "expansion",
-    "contraction": "contraction",
-    "three_epoch": "three_epoch",
-    "ancient_recent_compound": "three_epoch",
-    "ancient_recent_conflict": "three_epoch",
-    "serial_founder": "serial_founder",
-    "serial_founder_extreme": "serial_founder",
-    "classic_sawtooth": "zigzag",
-    "canonical_zigzag_1s14": "zigzag",
-    "canonical_smcpp_sawtooth": "zigzag",
-    "oscillating_mild": "zigzag",
-    "zigzag_strong": "zigzag",
-    "zigzag": "zigzag",
-    "empirical_human_ne_template": "empirical_human_ne_template",
-    "sawtooth": "zigzag",
-    "literature_sawtooth": "zigzag",
     "bottleneck": "bottleneck",
     "ooa_chain": "bottleneck",
+    "sawtooth": "zigzag",
+    "literature_sawtooth": "zigzag",
+    "empirical_human_ne_template": "empirical_human_ne_template",
     "stdpopsim_single_pop": "stdpopsim",
 }
 
@@ -446,8 +414,6 @@ def test_native_literature_model_survives_full_sample_generation() -> None:
     sample = simulate_one((0, dataclasses.asdict(cfg), {"rec_maps": {}, "mut_maps": {}}, 721))
     meta = sample["metadata"]
 
-    assert sample["demo_id"] == GENERATOR_RECIPE_IDS["stdpopsim_single_pop"]
-    assert sample["demography_id"] == GENERATOR_RECIPE_IDS["stdpopsim_single_pop"]
     assert sample["demography_type_id"] == DEMOGRAPHY_TYPE_IDS["stdpopsim"]
     assert sample["generator_recipe_id"] == GENERATOR_RECIPE_IDS["stdpopsim_single_pop"]
     assert sample["target_log10_ne"].shape == (cfg.time_bins,)
@@ -502,21 +468,13 @@ def test_continuous_sawtooth_ground_truth_does_not_depend_on_label_bins(sampler)
 def test_all_registered_demographies_have_probability_fields() -> None:
     assert {name for name, _ in DEMO_PROB_FIELDS} == set(DEMO_SAMPLERS)
     assert {field for _, field in DEMO_PROB_FIELDS} == set(DEMOGRAPHY_PROB_FIELDS)
-    assert set(GENERATOR_RECIPE_IDS) == (
-        set(DEMO_SAMPLERS) | {"stdpopsim"} | RETIRED_GENERATOR_RECIPES
-    )
-    # A retired recipe keeps its id and its public type so old datasets
-    # decode, but nothing may still sample it.
-    assert RETIRED_GENERATOR_RECIPES.isdisjoint(DEMO_SAMPLERS)
-    assert RETIRED_GENERATOR_RECIPES.isdisjoint(
-        field for _, field in DEMO_PROB_FIELDS
-    )
+    # Every id names a sampler this generator still has.  Nothing is kept for
+    # a dataset written before a change: the schema version refuses those long
+    # before an id is ever read.
+    assert set(GENERATOR_RECIPE_IDS) == set(DEMO_SAMPLERS) | {"stdpopsim"}
     assert set(GENERATOR_RECIPE_TO_DEMOGRAPHY_TYPE) == set(GENERATOR_RECIPE_IDS)
-    assert DEMO_IDS == GENERATOR_RECIPE_IDS
-    assert len(set(DEMO_IDS.values())) == len(DEMO_IDS)
     assert len(set(DEMOGRAPHY_TYPE_IDS.values())) == len(DEMOGRAPHY_TYPE_IDS)
     assert len(set(GENERATOR_RECIPE_IDS.values())) == len(GENERATOR_RECIPE_IDS)
-    assert {value: key for key, value in DEMO_IDS.items()} == ID_TO_DEMO
     assert {
         value: key for key, value in DEMOGRAPHY_TYPE_IDS.items()
     } == ID_TO_DEMOGRAPHY_TYPE
@@ -530,12 +488,8 @@ def test_public_demography_types_are_compact_and_explicit() -> None:
         "constant",
         "random_walk",
         "bottleneck",
-        "exponential_growth",
-        "exponential_decline",
         "expansion",
         "contraction",
-        "three_epoch",
-        "serial_founder",
         "zigzag",
         "empirical_human_ne_template",
         "stdpopsim",
@@ -555,39 +509,16 @@ def test_public_demography_types_are_compact_and_explicit() -> None:
         "event_on_background",
         "multi_event",
         "exponential",
-        # Retired, kept resolvable so older datasets still decode.
-        "ancient_event",
-        "ultra_stress",
     }
 
 
-@pytest.mark.parametrize(
-    ("stress_type", "expected"),
-    [
-        ("ultra_random_walk", "random_walk"),
-        ("ultra_recent_bottleneck", "bottleneck"),
-        ("ultra_founder_recovery", "bottleneck"),
-        ("ultra_rapid_recent_growth", "exponential_growth"),
-        ("ultra_serial_founder", "serial_founder"),
-        ("ultra_ancient_recent_conflict", "three_epoch"),
-    ],
-)
-def test_ultra_stress_is_classified_by_sampled_mechanism(
-    stress_type: str,
-    expected: str,
-) -> None:
-    assert ULTRA_STRESS_TYPE_TO_DEMOGRAPHY_TYPE[stress_type] == expected
-    assert resolve_demography_type(
-        "ultra_stress",
-        [10_000.0, 20_000.0],
-        {"stress_type": stress_type},
-    ) == expected
+def test_direction_is_read_from_the_trajectory_not_the_sampler() -> None:
+    """Whether a size change is an expansion or a contraction is a property of
+    what was drawn, so it cannot be a fixed attribute of the recipe."""
 
-
-def test_ancient_event_is_classified_by_forward_time_direction() -> None:
-    assert resolve_demography_type("ancient_event", [20_000.0, 10_000.0], {}) == "expansion"
-    assert resolve_demography_type("ancient_event", [10_000.0, 20_000.0], {}) == "contraction"
-    assert resolve_demography_type("ancient_event", [10_000.0, 10_000.0], {}) == "constant"
+    assert resolve_demography_type("size_event", [20_000.0, 10_000.0], {}) == "expansion"
+    assert resolve_demography_type("size_event", [10_000.0, 20_000.0], {}) == "contraction"
+    assert resolve_demography_type("size_event", [10_000.0, 10_000.0], {}) == "constant"
 
 
 @pytest.mark.parametrize("generator_recipe", sorted(DEMO_SAMPLERS))
@@ -634,7 +565,6 @@ def test_taxonomy_preserves_every_recipe_trajectory_and_adds_uniform_metrics(
     )
     assert meta["demography_type"] == expected_type
     assert meta["demography_type_id"] == DEMOGRAPHY_TYPE_IDS[expected_type]
-    assert meta["demography_id"] == GENERATOR_RECIPE_IDS[generator_recipe]
     if generator_recipe == "near_constant":
         assert meta["history_family"] == "stable"
     np.testing.assert_array_equal(meta["demography_breaks"], expected_breaks)
@@ -662,10 +592,6 @@ def test_taxonomy_preserves_every_recipe_trajectory_and_adds_uniform_metrics(
     assert meta["log10_ne_range"] == pytest.approx(float(np.ptp(log_values)))
     assert meta["total_variation_log10"] == pytest.approx(float(np.abs(differences).sum()))
     assert meta["turn_count"] == expected_turns
-    if "event_severity" in raw_meta:
-        assert meta["recipe_event_severity"] == pytest.approx(raw_meta["event_severity"])
-    else:
-        assert meta["recipe_event_severity"] is None
 
 
 def test_shape_metrics_include_growth_limits_and_instantaneous_resets() -> None:

@@ -25,7 +25,6 @@ from simulator.config import (
     DEMOGRAPHY_PROB_FIELDS,
     NE_BOUNDS,
     NE_LOG10_BOUNDS,
-    RETIRED_GENERATOR_RECIPES,
     Config,
 )
 from simulator.demography import (
@@ -386,8 +385,6 @@ def test_every_recipe_reports_severity_as_a_realised_ratio() -> None:
             assert 0.0 < severity <= 1.0 + 1e-9, name
             # One definition, everywhere: smallest size over largest.
             assert severity == pytest.approx(float(shape.min() / shape.max())), name
-            # And no sampler may reintroduce a second convention.
-            assert meta["recipe_event_severity"] is None, name
 
 
 def test_the_mixture_is_normalised_and_every_recipe_is_reachable() -> None:
@@ -399,13 +396,21 @@ def test_the_mixture_is_normalised_and_every_recipe_is_reachable() -> None:
     assert len(DEMO_SAMPLERS) == 12
 
 
-def test_retired_recipes_decode_but_cannot_be_drawn() -> None:
+def test_every_recipe_id_names_a_live_sampler() -> None:
+    """Nothing is carried for a dataset that predates a change.
+
+    The tables used to hold thirty retired names so an older dataset could
+    still decode its rows, but that decode was unreachable: the schema version
+    is checked first and refuses the whole file.  Ids are dense and start at
+    zero, and every one of them is a sampler this generator still has.
+    """
+
     from simulator.config import GENERATOR_RECIPE_IDS
 
-    assert len(RETIRED_GENERATOR_RECIPES) == 30
-    for name in RETIRED_GENERATOR_RECIPES:
-        assert name in GENERATOR_RECIPE_IDS
-        assert name not in DEMO_SAMPLERS
+    assert set(GENERATOR_RECIPE_IDS) == set(DEMO_SAMPLERS) | {"stdpopsim"}
+    assert sorted(GENERATOR_RECIPE_IDS.values()) == list(
+        range(len(GENERATOR_RECIPE_IDS))
+    )
 
 
 def test_the_level_prior_covers_the_head_s_whole_output_range() -> None:

@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from pandas.io.common import infer_compression
 
+from .assets import asset_path
 from .config import MAX_MSPRIME_RATE, Config
 from .utils import loguniform
 
@@ -506,14 +507,8 @@ def _summarize_maps(path: str, maps: dict[str, PiecewiseRateMap], requested_unit
 def _resolve_map_path(path: str) -> Path | None:
     if not path:
         return None
-    raw = Path(path).expanduser()
-    if raw.exists():
-        return raw
-    if raw.is_absolute():
-        return None
-    repo_root = Path(__file__).resolve().parents[1]
-    repo_path = repo_root / raw
-    return repo_path if repo_path.exists() else None
+    resolved = asset_path(path)
+    return resolved if resolved.exists() else None
 
 
 def load_empirical_maps(cfg: Config) -> EmpiricalMapStore:

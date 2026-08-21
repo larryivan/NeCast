@@ -256,9 +256,7 @@ def test_the_frozen_catalogue_matches_the_published_event_table() -> None:
     """
 
     cfg = Config()
-    generation_edges, generation_mids = time_grid(
-        dataclasses.replace(cfg, time_bins=cfg.demography_generation_bins)
-    )
+    generation_edges, generation_mids = time_grid(cfg)
     breaks, values, meta = _canonical_zigzag_1s14(
         np.random.default_rng(0), cfg, generation_edges, generation_mids
     )
@@ -289,9 +287,7 @@ def test_the_smcpp_sawtooth_is_the_same_history_as_zigzag_1s14() -> None:
 
     cfg = dataclasses.replace(Config(), time_bins=64)
     edges, _ = time_grid(cfg)
-    generation_edges, generation_mids = time_grid(
-        dataclasses.replace(cfg, time_bins=cfg.demography_generation_bins)
-    )
+    generation_edges, generation_mids = time_grid(cfg)
     labels = []
     for sampler in (_canonical_zigzag_1s14, _canonical_smcpp_sawtooth):
         breaks, values, meta = sampler(
@@ -491,9 +487,7 @@ def test_the_published_sawtooth_shape_is_a_class_the_mixture_trains_on() -> None
     # The published curve itself, straight from the hand-written event table:
     # it no longer has a recipe, so there is nothing to draw it from.
     cfg = Config()
-    generation_edges, generation_mids = time_grid(
-        dataclasses.replace(cfg, time_bins=cfg.demography_generation_bins)
-    )
+    generation_edges, generation_mids = time_grid(cfg)
     target_edges, _ = time_grid(cfg)
     breaks, values, meta = _canonical_zigzag_1s14(
         np.random.default_rng(0), cfg, generation_edges, generation_mids

@@ -23,7 +23,9 @@ from simulator.demography import (
     DEMO_PROB_FIELDS,
     DEMO_SAMPLERS,
     _clean_demography,
+    epochs_from_curve,
     sample_custom_demography,
+    spectral_walk_curve,
 )
 from simulator.sample import simulate_one
 from simulator.stdpopsim_support import try_stdpopsim_sample
@@ -34,12 +36,10 @@ def _only_demography(
     name: str,
     *,
     target_bins: int,
-    generation_bins: int = 48,
 ) -> Config:
     cfg = dataclasses.replace(
         Config(),
         time_bins=target_bins,
-        demography_generation_bins=generation_bins,
     )
     for field in DEMOGRAPHY_PROB_FIELDS:
         setattr(cfg, field, 0.0)
@@ -72,7 +72,7 @@ def test_target_resolution_does_not_change_any_latent_history_or_rng(
 ) -> None:
     cfg48 = _only_demography(generator_recipe, target_bins=48)
     cfg64 = dataclasses.replace(cfg48, time_bins=64)
-    seed = 3 if generator_recipe == "ultra_stress" else 830_001
+    seed = 830_001
     rng48 = np.random.default_rng(seed)
     rng64 = np.random.default_rng(seed)
 
@@ -84,8 +84,6 @@ def test_target_resolution_does_not_change_any_latent_history_or_rng(
     assert rng48.bit_generator.state == rng64.bit_generator.state
     assert target48.shape == (48,)
     assert target64.shape == (64,)
-    if generator_recipe == "ultra_stress":
-        assert meta48["stress_type"] == "ultra_random_walk"
 
     edges64, _ = time_grid(cfg64)
     expected64 = bin_average_log10_ne(
@@ -119,7 +117,6 @@ def _full_sample_config(*, target_bins: int) -> Config:
         seq_len=10_000,
         n_haplotypes=8,
         time_bins=target_bins,
-        demography_generation_bins=48,
         baseline_mu=1.0e-7,
         map_segments_min=8,
         map_segments_max=8,
@@ -200,13 +197,9 @@ def test_core_manifest_records_distinct_target_and_history_grids(
     )
     for payload in (config, manifest):
         assert payload["time_bins"] == 64
-        assert payload["demography_generation_bins"] == 48
+        assert payload["demography_resolution_log10"] > 0.0
         assert len(payload["time_edges"]) == 65
         assert len(payload["time_mids"]) == 64
-        assert len(payload["demography_generation_time_edges"]) == 49
-        assert len(payload["demography_generation_time_mids"]) == 48
-        assert payload["time_edges"][0] == payload["demography_generation_time_edges"][0]
-        assert payload["time_edges"][-1] == payload["demography_generation_time_edges"][-1]
 
 
 def test_stdpopsim_target_resolution_does_not_change_model_or_simulation_seed(
@@ -261,7 +254,6 @@ def test_stdpopsim_target_resolution_does_not_change_model_or_simulation_seed(
         enable_stdpopsim=True,
         stdpopsim_models="FakeModel",
         time_bins=48,
-        demography_generation_bins=48,
     )
     cfg64 = dataclasses.replace(cfg48, time_bins=64)
     result48 = try_stdpopsim_sample(np.random.default_rng(2026), cfg48)
@@ -308,13 +300,13 @@ def _trajectory_hash(
         (
             "empirical_human_ne_template",
             830_001,
-            "06518b7921269ee34846720fb7b44e624c61a6d86a5dc2938550a534f176dc57",
-            4_014_981_613_137_965_452,
+            "3887f17b0e7f640d4b899e57157f313bb91a4c62eff9849b40209f1dbdb55947",
+            6_711_622_359_113_815_556,
         ),
         (
             "event_on_background",
             830_001,
-            "c406694bbc358976f62bd08ea6af4224db9198980374036d5e3cd46ed5450d78",
+            "ac2ca4238a86c4d7997f04bba9edd40503304ba31b4b5e30c547328395c134d0",
             1_791_161_688_086_831_483,
         ),
         (
@@ -356,7 +348,7 @@ def _trajectory_hash(
         (
             "spectral_walk",
             830_001,
-            "0ad7ad7219e97d6cbd72fc6850dbdf9e93bab52e342cf3ed7903915bc503aad1",
+            "7f1579fa7c95f1ef917b2947e059b9052effb7fef5fd15ee3af94679ae9d0b75",
             12_005_372_267_971_068_725,
         ),
         (
@@ -367,20 +359,21 @@ def _trajectory_hash(
         ),
     ],
 )
-def test_generation_grid_preserves_pre_upgrade_latent_golden(
-    # The three stress hashes were updated when the effective-size bounds were
-    # consolidated: twenty clip sites had used at least five different pairs,
-    # and the stress samplers moved from a lower bound of 100 to the declared
-    # stress band of 50 to 2,000,000.  Two of them now reach log10 1.700 where
-    # they were previously held at 2.000.  Every non-stress hash is unchanged,
-    # and so is the RNG tail of all three, so the random stream was not
-    # disturbed -- only what the values were clipped to.
+def test_latent_histories_are_pinned(
+    # Nine of these twelve are byte-identical to the goldens taken before
+    # histories became functions of continuous time, random-number tails
+    # included, which is the evidence that the change reached only what it was
+    # aimed at.  The three that moved are the three that were being evaluated on
+    # a grid: ``spectral_walk`` and ``event_on_background`` keep their tails and
+    # changed only where their epochs fall, and ``empirical_human_ne_template``
+    # draws its perturbation per template knot instead of per label bin, which
+    # is a different number of draws and so a different tail.
     recipe: str,
     seed: int,
     expected_hash: str,
     expected_tail: int,
 ) -> None:
-    cfg = Config(time_bins=48, demography_generation_bins=48)
+    cfg = Config()
     edges, mids = time_grid(cfg)
     rng = np.random.default_rng(seed)
 
@@ -396,6 +389,89 @@ def test_generation_grid_preserves_pre_upgrade_latent_golden(
     )
 
     assert _trajectory_hash(breaks, values, growth_rates) == expected_hash
-    if recipe == "ultra_stress":
-        assert meta["stress_type"] == "ultra_random_walk"
     assert int(rng.bit_generator.random_raw()) == expected_tail
+
+
+# --------------------------------------------------------------------------
+# The label grid is a view of the history, never an input to it
+# --------------------------------------------------------------------------
+
+
+def test_the_latent_history_does_not_depend_on_the_label_resolution() -> None:
+    """Asking for a finer label must not change the prior the data comes from.
+
+    The samplers used to step ``cfg.time_bins`` times and place their knots at a
+    fixed fraction of that count, so moving the target from 48 bins to 64 moved
+    the histories with it.  That is why a separate, frozen generation grid had
+    to exist at all.  Histories are now functions of continuous time, so the
+    same seed gives the same history at any label resolution and the grid is
+    free to move.
+    """
+
+    for seed in range(120):
+        histories = []
+        for bins in (64, 96, 128):
+            cfg = dataclasses.replace(Config(), time_bins=bins)
+            _, target, meta = sample_custom_demography(np.random.default_rng(seed), cfg)
+            assert np.asarray(target).shape == (bins,)
+            histories.append(
+                (
+                    meta["generator_recipe"],
+                    tuple(meta["demography_breaks"]),
+                    tuple(meta["demography_values"]),
+                    tuple(meta["demography_growth_rates"]),
+                )
+            )
+        assert histories[0] == histories[1] == histories[2], (
+            f"seed {seed} ({histories[0][0]}) drew a different history per label grid"
+        )
+
+
+def test_every_label_resolution_is_a_view_of_the_same_curve() -> None:
+    """And the label itself is that history averaged onto whichever grid."""
+
+    for seed in range(60):
+        for bins in (64, 96, 128):
+            cfg = dataclasses.replace(Config(), time_bins=bins)
+            _, target, meta = sample_custom_demography(np.random.default_rng(seed), cfg)
+            np.testing.assert_allclose(
+                bin_average_log10_ne(
+                    time_grid(cfg)[0],
+                    list(meta["demography_breaks"]),
+                    list(meta["demography_values"]),
+                    list(meta["demography_growth_rates"]),
+                ),
+                target,
+                rtol=0.0,
+                atol=1e-9,
+            )
+
+
+def test_epochs_follow_the_curve_to_the_tolerance_they_promise() -> None:
+    """``epochs_from_curve`` is defined by an error bound, so hold it to it.
+
+    The bound is what replaces the bin count: nothing downstream may assume a
+    number of epochs, only that the piecewise-constant history is never further
+    than ``tol`` from the curve it stands for.
+    """
+
+    rng = np.random.default_rng(3)
+    for _ in range(30):
+        seed = int(rng.integers(1 << 40))
+        slope = float(rng.uniform(0.6, 2.0))
+        modes = int(rng.integers(6, 49))
+        tilt = float(rng.uniform(-1.2, 1.2))
+        span = float(rng.uniform(0.3, 3.0))
+
+        def curve(t: np.ndarray) -> np.ndarray:
+            return spectral_walk_curve(t, seed, slope, modes, tilt, span, 4.0)
+
+        for tol in (0.1, 0.02):
+            breaks, values = epochs_from_curve(curve, 50.0, 500_000.0, tol)
+            edges = np.concatenate(([50.0], breaks, [500_000.0]))
+            for index, (left, right) in enumerate(zip(edges[:-1], edges[1:])):
+                probe = curve(np.geomspace(left, right, 33))
+                held = np.log10(values[index])
+                assert float(np.max(np.abs(probe - held))) <= tol, (
+                    f"epoch {index} drifts past its {tol} bound"
+                )

@@ -30,7 +30,7 @@ from simulator.demography import (
     sample_custom_demography,
     spectral_walk_curve,
 )
-from simulator.utils import time_grid
+from simulator.utils import bin_average_log10_ne, time_grid
 
 
 ANCHOR_TURNS = (6, 9, 13)
@@ -197,64 +197,71 @@ def test_the_distribution_does_not_move_with_the_target_resolution(
     )
 
 
-def test_a_finer_generation_grid_converges_rather_than_drifts() -> None:
-    """48 generation bins has to be enough to resolve up to 48 modes.
+def test_the_quadrature_is_past_convergence() -> None:
+    """The curve's amplitude is a property of the function, not of a sample.
 
-    Averaging over the bin is what makes that true: it is a low-pass filter, so
-    the modes above the grid's Nyquist limit average away inside a bin instead
-    of folding back onto the ones below.  Doubling and quadrupling the grid
-    then changes the answer by a few percent rather than revealing that 48 was
-    reading a different distribution.
+    ``SPECTRAL_QUADRATURE`` exists only to measure the range and total variation
+    of a band-limited series numerically.  If it were too coarse the realised
+    amplitude would depend on where you looked, so probing far more densely than
+    it does has to return the same answer.
     """
 
-    coarse = _profile(n=400, demography_generation_bins=48)
-    fine = _profile(n=400, demography_generation_bins=192)
-    assert np.median(fine["total_variation"]) == pytest.approx(
-        np.median(coarse["total_variation"]), rel=0.15
-    )
-    assert np.median(fine["range"]) == pytest.approx(
-        np.median(coarse["range"]), rel=0.1
-    )
+    rng = np.random.default_rng(11)
+    for _ in range(40):
+        ne_range = float(rng.uniform(0.2, 3.0))
+        kwargs = dict(
+            seed=int(rng.integers(1 << 40)),
+            slope=float(rng.uniform(0.6, 2.0)),
+            n_modes=int(rng.integers(6, 49)),
+            tilt=float(rng.uniform(-1.2, 1.2)),
+            ne_range=ne_range,
+            level=4.0,
+        )
+        coarse = spectral_walk_curve(np.geomspace(50.0, 500_000.0, 2_000), **kwargs)
+        fine = spectral_walk_curve(np.geomspace(50.0, 500_000.0, 40_000), **kwargs)
+        assert float(np.ptp(fine)) == pytest.approx(float(np.ptp(coarse)), abs=2e-3)
+        # And the realised amplitude is the one that was asked for, unless the
+        # total-variation cap bound, which only ever shrinks it.  The quadrature
+        # samples bin centres, so a denser probe may find a peak just past it.
+        assert float(np.ptp(fine)) <= ne_range * 1.01
 
 
 def test_the_stored_scalars_reproduce_the_curve_at_any_resolution() -> None:
     """The six numbers in the metadata are the whole history.
 
-    Not a convenience: it is what lets a row generated at 64 bins be re-scored
-    against a 96- or 128-bin target without regenerating the dataset, and what
-    makes the label auditable after the fact.
+    Not a convenience: it is what lets a row generated against a 64-bin target
+    be re-scored against a 96- or 128-bin one without regenerating the dataset,
+    and what makes the label auditable after the fact.
     """
 
     cfg = _only_spectral()
     _, target, meta = sample_custom_demography(np.random.default_rng(7), cfg)
-    generation_edges = np.geomspace(
-        cfg.min_time, cfg.max_time, cfg.demography_generation_bins + 1
-    )
+    edges = np.concatenate(([cfg.min_time], meta["demography_breaks"], [cfg.max_time]))
     replayed = spectral_walk_curve(
-        generation_edges,
+        np.sqrt(edges[:-1] * edges[1:]),
         meta["spectral_seed"],
         meta["spectral_slope"],
         meta["spectral_n_modes"],
         meta["spectral_tilt"],
         meta["spectral_ne_range"],
         meta["spectral_level"],
+        cfg.min_time,
+        cfg.max_time,
     )
     np.testing.assert_allclose(
         replayed, np.log10(meta["demography_values"]), rtol=0.0, atol=1e-9
     )
-    # And the same parameters on a grid the sample never saw.
-    dense = spectral_walk_curve(
-        np.geomspace(cfg.min_time, cfg.max_time, 4 * cfg.demography_generation_bins + 1),
-        meta["spectral_seed"],
-        meta["spectral_slope"],
-        meta["spectral_n_modes"],
-        meta["spectral_tilt"],
-        meta["spectral_ne_range"],
-        meta["spectral_level"],
-    )
-    assert dense.size == 4 * cfg.demography_generation_bins
-    assert float(dense.max() - dense.min()) == pytest.approx(
-        float(np.ptp(np.log10(meta["demography_values"]))), rel=0.25
+    # And the label those epochs carry is the one the shard stores.
+    np.testing.assert_allclose(
+        bin_average_log10_ne(
+            time_grid(cfg)[0],
+            list(meta["demography_breaks"]),
+            list(meta["demography_values"]),
+            [0.0] * len(meta["demography_values"]),
+        ),
+        target,
+        rtol=0.0,
+        atol=1e-9,
     )
 
 
@@ -329,25 +336,27 @@ def test_a_generated_row_replays_exactly_from_its_metadata_alone(tmp_path) -> No
     with gzip.open(tmp_path / "ds" / "metadata" / "samples.jsonl.gz", "rt") as handle:
         rows = [json.loads(line) for line in handle]
 
-    generation_edges = np.geomspace(
-        cfg.min_time, cfg.max_time, cfg.demography_generation_bins + 1
-    )
     target_edges, _ = time_grid(cfg)
     for index, row in enumerate(rows):
+        edges = np.concatenate(
+            ([cfg.min_time], row["demography_breaks"], [cfg.max_time])
+        )
         curve = spectral_walk_curve(
-            generation_edges,
+            np.sqrt(edges[:-1] * edges[1:]),
             row["spectral_seed"],
             row["spectral_slope"],
             row["spectral_n_modes"],
             row["spectral_tilt"],
             row["spectral_ne_range"],
             row["spectral_level"],
+            cfg.min_time,
+            cfg.max_time,
         )
         replayed = bin_average_log10_ne(
             target_edges,
-            list(generation_edges[1 : cfg.demography_generation_bins]),
+            list(row["demography_breaks"]),
             list(10.0**curve),
-            [0.0] * cfg.demography_generation_bins,
+            [0.0] * curve.size,
         )
         np.testing.assert_allclose(
             replayed,

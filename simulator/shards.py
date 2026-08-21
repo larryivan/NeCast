@@ -808,8 +808,8 @@ def _validate_sample_artifact_pair(
             if int(row.get("target_time_bins", -1)) != cfg.time_bins:
                 raise ValueError("metadata target bin count mismatch")
             if (
-                int(row.get("demography_generation_bins", -1))
-                != cfg.demography_generation_bins
+                float(row.get("demography_resolution_log10", -1.0))
+                != cfg.demography_resolution_log10
             ):
                 raise ValueError("metadata history bin count mismatch")
     if row_count != expected_count:
@@ -1236,7 +1236,7 @@ def _metadata_row(meta: dict) -> dict:
         "growth_rate_per_generation": meta.get("growth_rate_per_generation", 0.0),
         "target_quality": meta.get("target_quality", "strict_single_population"),
         "target_time_bins": meta.get("target_time_bins", 0),
-        "demography_generation_bins": meta.get("demography_generation_bins", 0),
+        "demography_resolution_log10": meta.get("demography_resolution_log10", 0.0),
         "empirical_ne_template": meta.get("empirical_ne_template", False),
         "template_source_key": meta.get("template_source_key", ""),
         "template_method": meta.get("template_method", ""),
@@ -1280,7 +1280,7 @@ def _metadata_row(meta: dict) -> dict:
         "pair_coalescences_total": meta.get("pair_coalescences_total", 0.0),
         "resolvable_bins": meta.get("resolvable_bins", 0),
         "stress_scenario": meta.get("stress_scenario", False),
-        "bin_aligned_demography": meta.get("bin_aligned_demography", False),
+        "curve_demography": meta.get("curve_demography", False),
         "knot_count": meta.get("knot_count", 0),
         "event_time": meta.get("event_time", 0.0),
         "event_count": meta.get("event_count", 0),
@@ -1574,8 +1574,8 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
                 if int(row.get("target_time_bins", -1)) != cfg.time_bins:
                     raise ValueError("metadata target bin count mismatch")
                 if (
-                    int(row.get("demography_generation_bins", -1))
-                    != cfg.demography_generation_bins
+                    float(row.get("demography_resolution_log10", -1.0))
+                    != cfg.demography_resolution_log10
                 ):
                     raise ValueError(
                         "metadata demography generation bin count mismatch"

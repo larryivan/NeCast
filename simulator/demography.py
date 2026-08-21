@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Callable
 from typing import Sequence
 
@@ -26,7 +25,6 @@ from .stdpopsim_templates import (
 )
 from .utils import (
     bin_average_log10_ne,
-    demography_generation_grid,
     loguniform,
     piecewise_eval,
     time_grid,
@@ -187,8 +185,8 @@ def _trajectory_form(
         return "constant"
     if generator_recipe == "empirical_human_ne_template":
         return "empirical_template"
-    if meta.get("bin_aligned_demography", False):
-        return "bin_aligned_piecewise_constant"
+    if meta.get("curve_demography", False):
+        return "resolved_curve"
     if any(abs(float(rate)) > 0.0 for rate in growth_rates):
         if meta.get("demography_function") == "exponential_linear_time" and len(breaks) == 1:
             return "exponential_linear_time"
@@ -417,26 +415,6 @@ def _smoothed_array(arr: np.ndarray, win: int) -> np.ndarray:
     return sm
 
 
-def _bin_aligned_values(
-    log10_values: Sequence[float],
-    edges: np.ndarray,
-    idx: Sequence[int] | None = None,
-    lo: float = 50.0,
-    hi: float = 2_000_000.0,
-) -> tuple[list[float], list[float]]:
-    arr = np.asarray(log10_values, dtype=np.float64)
-    if idx is None:
-        use_idx = np.arange(arr.size, dtype=int)
-    else:
-        use_idx = np.unique(np.asarray(idx, dtype=int))
-        use_idx = use_idx[(0 <= use_idx) & (use_idx < arr.size)]
-    if use_idx.size == 0 or use_idx[0] != 0:
-        use_idx = np.insert(use_idx, 0, 0)
-    breaks = [float(edges[i]) for i in use_idx[1:]]
-    values = [float(np.clip(10 ** float(arr[i]), lo, hi)) for i in use_idx]
-    return breaks, values
-
-
 def _constant(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
     n0 = loguniform(rng, *LEVEL_NE_RANGE)
     return [], [n0], {
@@ -509,54 +487,174 @@ SPECTRAL_STRESS_PROBABILITY = 0.035
 # nature does not: fully rough at full amplitude.  It binds above the 97th
 # percentile, so it shapes the tail without moving the body.
 SPECTRAL_TV_CAP = 9.0
-# Samples per bin used to turn the analytic curve into bin averages.  Averaging
-# is the anti-aliasing: at 48 generation bins the Nyquist limit is 24 modes and
-# the series carries up to 48, so the modes above it have to average away
-# inside a bin rather than fold back onto the ones below.
-SPECTRAL_OVERSAMPLE = 16
+# The walk is a band-limited function of continuous log time.  Its amplitude,
+# total variation and centre are properties of that function rather than of any
+# grid, so they are evaluated on a quadrature fine enough that the answer has
+# stopped moving: at most 49 modes need about 100 points by Nyquist and this is
+# forty times that.  It is a convergence budget, not a resolution choice, and
+# ``test_spectral_walk`` pins that refining it further changes nothing.
+SPECTRAL_QUADRATURE = 4096
+
+# Adaptive bisection needs a floor or a genuine discontinuity would refine for
+# ever.  Every discontinuity this module produces is passed in as a forced
+# breakpoint and lands exactly, so the floor is a numerical guard that the
+# samplers never reach, not a limit on how sharp a history may be.
+EPOCH_MIN_LOG_WIDTH = 1e-4
+# Points probed per candidate segment.  The test is whether the curve is flat
+# across the segment to tolerance; nine points resolve one mode of the finest
+# mode the series carries, and a segment that fails simply splits.
+EPOCH_PROBES = 9
 
 
-def spectral_walk_curve(
-    edges: np.ndarray,
+def epochs_from_curve(
+    curve: Callable[[np.ndarray], np.ndarray],
+    t_lo: float,
+    t_hi: float,
+    tol: float,
+    forced: Sequence[float] = (),
+    lo: float = 50.0,
+    hi: float = 2_000_000.0,
+) -> tuple[list[float], list[float]]:
+    """Piecewise-constant epochs following ``curve`` to within ``tol`` dex.
+
+    There is no grid.  A flat history costs one epoch and a rough one costs as
+    many as its roughness needs, so the cost of representing a history is set by
+    the history rather than by a bin count chosen in advance.  ``forced`` are
+    times that must be breakpoints -- the exact edges of a box-shaped event --
+    which is what lets an event start when it starts instead of when the nearest
+    grid line allows.
+
+    Returns msprime's ``(breaks, values)``: ``values[0]`` holds from the present
+    to ``breaks[0]``, and ``len(values) == len(breaks) + 1``.
+    """
+
+    if not np.isfinite(tol) or tol <= 0.0:
+        raise ValueError("tol must be a positive number of log10 Ne units")
+    log_lo, log_hi = float(np.log(t_lo)), float(np.log(t_hi))
+    bounds = {log_lo, log_hi}
+    for t in forced:
+        value = float(t)
+        if t_lo < value < t_hi:
+            bounds.add(float(np.log(value)))
+    ordered = sorted(bounds)
+
+    accepted: list[tuple[float, float, float, float]] = []
+    pending = [(ordered[i], ordered[i + 1]) for i in range(len(ordered) - 1)]
+    while pending:
+        left, right = pending.pop()
+        probe = np.linspace(left, right, EPOCH_PROBES)
+        sampled = np.asarray(curve(np.exp(probe)), dtype=np.float64)
+        low, high = float(sampled.min()), float(sampled.max())
+        if high - low <= tol or right - left <= EPOCH_MIN_LOG_WIDTH:
+            accepted.append((left, right, low, high))
+        else:
+            middle = 0.5 * (left + right)
+            pending.append((left, middle))
+            pending.append((middle, right))
+    accepted.sort()
+
+    # Splitting is driven by the roughest part of a segment, so a curve that is
+    # flat either side of one feature is left carrying epochs it does not need.
+    # Neighbours merge whenever the extremes already measured across both stay
+    # inside the tolerance, which no real jump ever does.  A forced breakpoint
+    # is kept only where the curve actually moves across it.
+    merged: list[tuple[float, float, float, float]] = []
+    for left, right, low, high in accepted:
+        if merged:
+            prev_left, _, prev_low, prev_high = merged[-1]
+            union_low, union_high = min(prev_low, low), max(prev_high, high)
+            if union_high - union_low <= tol:
+                merged[-1] = (prev_left, right, union_low, union_high)
+                continue
+        merged.append((left, right, low, high))
+
+    starts = np.exp([left for left, _, _, _ in merged])
+    centres = np.exp([0.5 * (left + right) for left, right, _, _ in merged])
+    levels = np.asarray(curve(centres), dtype=np.float64)
+    values = [float(np.clip(10.0 ** float(v), lo, hi)) for v in levels]
+    breaks = [float(t) for t in starts[1:]]
+    return breaks, values
+
+
+def spectral_walk_evaluator(
     seed: int,
     slope: float,
     n_modes: int,
     tilt: float,
     ne_range: float,
     level: float,
-) -> np.ndarray:
-    """Bin-averaged log10 Ne for one spectral walk.
+    t_lo: float = 50.0,
+    t_hi: float = 500_000.0,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Prepare one spectral walk for repeated evaluation.
 
-    Separate from the sampler because these arguments are exactly what the
-    metadata stores: a row can be replayed onto any grid without the dataset
-    that produced it.
+    Normalisation is a property of the whole function, so it is measured once on
+    the converged quadrature and then applied pointwise.  Adaptive bisection
+    asks for the curve a few thousand times per history; measuring it again on
+    every call would make that the dominant cost of generating a row.
     """
 
-    log_edges = np.log(np.asarray(edges, dtype=np.float64))
-    widths = np.diff(log_edges)
-    offsets = (np.arange(SPECTRAL_OVERSAMPLE, dtype=np.float64) + 0.5) / SPECTRAL_OVERSAMPLE
-    dense = log_edges[:-1, None] + offsets[None, :] * widths[:, None]
-    u = (dense - log_edges[0]) / (log_edges[-1] - log_edges[0])
+    log_lo, log_hi = float(np.log(t_lo)), float(np.log(t_hi))
+    span = log_hi - log_lo
 
     coeff_rng = np.random.default_rng(int(seed))
-    modes = np.arange(1, int(n_modes) + 1, dtype=np.float64)[:, None, None]
-    cos_c = coeff_rng.normal(size=int(n_modes))[:, None, None]
-    sin_c = coeff_rng.normal(size=int(n_modes))[:, None, None]
-    phase = modes * np.pi * u[None, :, :]
-    curve = (modes ** -float(slope) * (cos_c * np.cos(phase) + sin_c * np.sin(phase))).sum(0)
+    modes = np.arange(1, int(n_modes) + 1, dtype=np.float64)[:, None]
+    cos_c = coeff_rng.normal(size=int(n_modes))[:, None]
+    sin_c = coeff_rng.normal(size=int(n_modes))[:, None]
+    weights = modes ** -float(slope)
 
+    def series(u: np.ndarray) -> np.ndarray:
+        phase = modes * np.pi * np.atleast_1d(u)[None, :]
+        return (weights * (cos_c * np.cos(phase) + sin_c * np.sin(phase))).sum(0)
+
+    u_quad = (np.arange(SPECTRAL_QUADRATURE, dtype=np.float64) + 0.5) / SPECTRAL_QUADRATURE
+    raw_quad = series(u_quad)
+    baseline = float(raw_quad.mean())
     # Tilt before scaling: the envelope decides how the variation is split
     # between recent and ancient time, the scaling decides how much there is.
-    curve = (curve - curve.mean()) * np.exp(float(tilt) * (u - 0.5))
-    realised = float(curve.max() - curve.min())
-    curve = curve * (float(ne_range) / max(realised, 1e-12))
-    total_variation = float(np.abs(np.diff(curve.reshape(-1))).sum())
+    quad = (raw_quad - baseline) * np.exp(float(tilt) * (u_quad - 0.5))
+    scale = float(ne_range) / max(float(quad.max() - quad.min()), 1e-12)
+    quad = quad * scale
+    total_variation = float(np.abs(np.diff(quad)).sum())
     if total_variation > SPECTRAL_TV_CAP:
-        curve = curve * (SPECTRAL_TV_CAP / total_variation)
+        shrink = SPECTRAL_TV_CAP / total_variation
+        scale *= shrink
+        quad = quad * shrink
     # Centre on the midrange rather than the mean so the level below is the
     # midpoint of the realised curve and the bounds check is exact.
-    curve = curve - 0.5 * (curve.max() + curve.min())
-    return curve.mean(axis=1) + float(level)
+    offset = float(level) - 0.5 * float(quad.max() + quad.min())
+
+    def evaluate(times: np.ndarray) -> np.ndarray:
+        clipped = np.clip(np.asarray(times, dtype=np.float64), t_lo, t_hi)
+        u = (np.log(clipped) - log_lo) / span
+        return (series(u) - baseline) * np.exp(float(tilt) * (u - 0.5)) * scale + offset
+
+    return evaluate
+
+
+def spectral_walk_curve(
+    times: np.ndarray,
+    seed: int,
+    slope: float,
+    n_modes: int,
+    tilt: float,
+    ne_range: float,
+    level: float,
+    t_lo: float = 50.0,
+    t_hi: float = 500_000.0,
+) -> np.ndarray:
+    """log10 Ne of one spectral walk, at arbitrary times.
+
+    Separate from the sampler because these arguments are exactly what the
+    metadata stores: a row can be replayed at any time points, and onto any
+    label grid through :func:`bin_average_log10_ne`, without the dataset that
+    produced it.  Nothing here depends on a grid, so the same parameters mean
+    the same history whatever the label resolution turns out to be.
+    """
+
+    return spectral_walk_evaluator(
+        seed, slope, n_modes, tilt, ne_range, level, t_lo, t_hi
+    )(times)
 
 
 def spectral_walk_level(
@@ -593,8 +691,11 @@ def _spectral_walk(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mid
             min(SPECTRAL_RANGE_MEDIAN * np.exp(rng.normal(0.0, SPECTRAL_RANGE_LOG_SD)), cap)
         )
     level = spectral_walk_level(rng, ne_range, stress=stress)
-    log10_ne = spectral_walk_curve(edges, seed, slope, n_modes, tilt, ne_range, level)
-    breaks, values = _bin_aligned_values(log10_ne, edges)
+    t_lo, t_hi = float(edges[0]), float(edges[-1])
+    curve = spectral_walk_evaluator(
+        seed, slope, n_modes, tilt, ne_range, level, t_lo, t_hi
+    )
+    breaks, values = epochs_from_curve(curve, t_lo, t_hi, cfg.demography_resolution_log10)
     return breaks, values, {
         "spectral_seed": int(seed),
         "spectral_n_modes": int(n_modes),
@@ -603,7 +704,7 @@ def _spectral_walk(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mid
         "spectral_ne_range": float(ne_range),
         "spectral_level": float(level),
         "stress_scenario": bool(stress),
-        "bin_aligned_demography": True,
+        "curve_demography": True,
         "knot_count": int(len(values)),
         "has_recent_event": False,
         "has_ancient_event": False,
@@ -737,7 +838,7 @@ EVENT_BACKGROUND_DEPTH = (0.4, 2.5)        # decades, sign drawn
 
 
 def _event_on_background(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
-    t_max = float(edges[-1])
+    t_lo, t_hi = float(edges[0]), float(edges[-1])
     seed = int(rng.integers(0, 2**62))
     n_modes = int(rng.integers(*SPECTRAL_MODE_RANGE))
     slope = float(rng.uniform(*SPECTRAL_SLOPE_RANGE))
@@ -746,32 +847,39 @@ def _event_on_background(rng: np.random.Generator, cfg: Config, edges: np.ndarra
     # legible on top of it rather than being one wiggle among many.
     background = float(loguniform(rng, *EVENT_BACKGROUND_RANGE))
     level = spectral_walk_level(rng, background)
-    curve = spectral_walk_curve(edges, seed, slope, n_modes, tilt, background, level)
 
-    bin_starts = np.asarray(edges[:-1], dtype=np.float64)
+    spans: list[tuple[float, float, float]] = []
     depths: list[float] = []
     times: list[float] = []
     for _ in range(int(rng.integers(*EVENT_BACKGROUND_EVENTS))):
         start = float(
-            loguniform(rng, EVENT_BACKGROUND_ONSET[0], t_max * EVENT_BACKGROUND_ONSET[1])
+            loguniform(rng, EVENT_BACKGROUND_ONSET[0], t_hi * EVENT_BACKGROUND_ONSET[1])
         )
         end = start * (1.0 + float(loguniform(rng, *EVENT_BACKGROUND_DURATION_RATIO)))
         sign = 1.0 if rng.random() < 0.5 else -1.0
         depth = sign * float(loguniform(rng, *EVENT_BACKGROUND_DEPTH))
-        covered = (bin_starts >= start) & (bin_starts < end)
-        if not covered.any():
-            # Shorter than the bin it lands in.  Give it the one bin it starts
-            # in rather than dropping it: an event too brief for the grid to
-            # resolve is a real history, and the label is what the grid can say
-            # about it.
-            index = int(np.searchsorted(bin_starts, start, side="right") - 1)
-            covered[max(index, 0)] = True
-        curve = curve + np.where(covered, depth, 0.0)
+        spans.append((start, end, depth))
         depths.append(float(depth))
         times.append(float(start))
 
-    curve = np.clip(curve, *NE_LOG10_BOUNDS)
-    breaks, values = _bin_aligned_values(curve, edges)
+    smooth = spectral_walk_evaluator(
+        seed, slope, n_modes, tilt, background, level, t_lo, t_hi
+    )
+
+    def curve(t: np.ndarray) -> np.ndarray:
+        t = np.atleast_1d(np.asarray(t, dtype=np.float64))
+        value = smooth(t)
+        for start, end, depth in spans:
+            value = value + np.where((t >= start) & (t < end), depth, 0.0)
+        return np.clip(value, *NE_LOG10_BOUNDS)
+
+    # The event edges are the discontinuities, so they are the breakpoints.  An
+    # event starts when it starts: no grid line rounds its onset, and one
+    # shorter than any bin is no longer a special case needing rescue.
+    forced = [bound for start, end, _ in spans for bound in (start, end)]
+    breaks, values = epochs_from_curve(
+        curve, t_lo, t_hi, cfg.demography_resolution_log10, forced=forced
+    )
     return breaks, values, {
         "spectral_seed": int(seed),
         "spectral_n_modes": int(n_modes),
@@ -783,7 +891,7 @@ def _event_on_background(rng: np.random.Generator, cfg: Config, edges: np.ndarra
         "event_time": float(min(times)),
         "event_log_depths": depths,
         "event_permanent": False,
-        "bin_aligned_demography": True,
+        "curve_demography": True,
         "knot_count": int(len(values)),
         "has_recent_event": bool(min(times) <= 5_000.0),
         "has_ancient_event": bool(max(times) >= 50_000.0),
@@ -966,21 +1074,24 @@ def _canonical_smcpp_sawtooth(
 
 
 
-def _template_log10_bin_average(template, edges: np.ndarray, time_scale: float, n_grid: int = 8) -> np.ndarray:
-    t = np.maximum(np.asarray(template.generations_ago, dtype=np.float64), 1e-6)
-    log_t = np.log(t)
+def _template_curve(template, time_scale: float) -> Callable[[np.ndarray], np.ndarray]:
+    """Continuous log10 Ne of an inferred template, log-linear between knots."""
+
+    log_t = np.log(np.maximum(np.asarray(template.generations_ago, dtype=np.float64), 1e-6))
     log_ne = np.log10(np.asarray(template.ne, dtype=np.float64))
-    out: list[float] = []
-    for left, right in zip(edges[:-1], edges[1:]):
-        grid = np.geomspace(float(left), float(right), n_grid) / max(time_scale, 1e-6)
-        vals = np.interp(np.log(np.maximum(grid, 1e-6)), log_t, log_ne, left=log_ne[0], right=log_ne[-1])
-        out.append(float(np.mean(vals)))
-    return np.asarray(out, dtype=np.float64)
+    scale = max(float(time_scale), 1e-6)
+
+    def curve(t: np.ndarray) -> np.ndarray:
+        warped = np.maximum(np.asarray(t, dtype=np.float64) / scale, 1e-6)
+        return np.interp(np.log(warped), log_t, log_ne, left=log_ne[0], right=log_ne[-1])
+
+    return curve
 
 
 def _empirical_human_ne_template(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
     store = load_empirical_ne_templates(cfg)
     template = store.choose(rng, cfg)
+    t_lo, t_hi = float(edges[0]), float(edges[-1])
 
     time_scale = float(np.exp(rng.normal(0.0, cfg.empirical_ne_template_time_warp_sd)))
     time_scale = float(np.clip(time_scale, 0.45, 2.25))
@@ -989,18 +1100,40 @@ def _empirical_human_ne_template(rng: np.random.Generator, cfg: Config, edges: n
     contrast = float(np.clip(contrast, 0.70, 1.45))
     bin_noise_sd = float(cfg.empirical_ne_template_bin_noise_sd)
 
-    raw = _template_log10_bin_average(template, edges, time_scale=time_scale)
-    center = float(np.median(raw))
-    arr = center + contrast * (raw - center) + log_shift
-    if bin_noise_sd > 0:
-        noise = rng.normal(0.0, bin_noise_sd, size=cfg.time_bins)
-        noise = _smoothed_array(noise, int(rng.integers(2, 5)))
-        arr = arr + noise
-    arr = np.clip(arr, NE_LOG10_BOUNDS[0], NE_LOG10_BOUNDS[1])
+    base = _template_curve(template, time_scale)
+    # The perturbation rides on the template's own knots, so how rough the
+    # published inference is decides how rough the perturbation can be.  Drawing
+    # it per label bin instead would have made the noise, and with it the
+    # history, a function of the label resolution.
+    knots = np.unique(
+        np.clip(np.asarray(template.generations_ago, dtype=np.float64) * time_scale, t_lo, t_hi)
+    )
+    if bin_noise_sd > 0 and knots.size:
+        drawn = rng.normal(0.0, bin_noise_sd, size=knots.size)
+        wobble = _smoothed_array(drawn, int(rng.integers(2, 5)))
+    else:
+        wobble = np.zeros(knots.size, dtype=np.float64)
+    log_knots = np.log(np.maximum(knots, 1e-6))
+    centre = float(np.median(base(np.geomspace(t_lo, t_hi, 256))))
 
-    breaks, values = _bin_aligned_values(arr, edges, lo=100.0, hi=2_000_000.0)
-    recent = arr[mids <= 5_000.0]
-    ancient = arr[mids >= 50_000.0]
+    def curve(t: np.ndarray) -> np.ndarray:
+        t = np.atleast_1d(np.asarray(t, dtype=np.float64))
+        value = centre + contrast * (base(t) - centre) + log_shift
+        if wobble.size:
+            value = value + np.interp(np.log(np.maximum(t, 1e-6)), log_knots, wobble)
+        return np.clip(value, NE_LOG10_BOUNDS[0], NE_LOG10_BOUNDS[1])
+
+    breaks, values = epochs_from_curve(
+        curve,
+        t_lo,
+        t_hi,
+        cfg.demography_resolution_log10,
+        forced=knots,
+        lo=100.0,
+        hi=2_000_000.0,
+    )
+    recent = curve(np.geomspace(t_lo, 5_000.0, 64))
+    ancient = curve(np.geomspace(50_000.0, t_hi, 64))
     return breaks, values, {
         "empirical_ne_template": True,
         "target_quality": "empirical_inference_template_perturbed",
@@ -1021,32 +1154,10 @@ def _empirical_human_ne_template(rng: np.random.Generator, cfg: Config, edges: n
         "template_bin_noise_sd": bin_noise_sd,
         "dense_demography": True,
         "dense_type": "empirical_human_ne_template",
-        "bin_aligned_demography": True,
         "knot_count": int(len(values)),
-        "has_recent_event": bool(recent.size and np.ptp(recent) >= 0.15),
-        "has_ancient_event": bool(ancient.size and np.ptp(ancient) >= 0.15),
+        "has_recent_event": bool(np.ptp(recent) >= 0.15),
+        "has_ancient_event": bool(np.ptp(ancient) >= 0.15),
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -1505,27 +1616,16 @@ def choose_generator_recipe(rng: np.random.Generator, cfg: Config) -> str:
 
 
 def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msprime.Demography, np.ndarray, dict]:
-    target_edges, _ = time_grid(cfg)
-    generation_edges, generation_mids = demography_generation_grid(cfg)
-    # Existing samplers use ``cfg.time_bins`` for their internal array lengths.
-    # Give them a view whose time_bins matches the fixed generation grid so the
-    # v3 latent histories and RNG stream remain bit-for-bit unchanged while the
-    # supervised target moves from 48/32 to 64 bins.
-    sampler_cfg = dataclasses.replace(
-        cfg,
-        time_bins=cfg.demography_generation_bins,
-    )
-    generator_recipe = choose_generator_recipe(rng, sampler_cfg)
+    # Samplers read only the endpoints of this grid.  A history is a function
+    # of continuous time, so the label resolution can move without moving the
+    # history, the random-number stream, or anything downstream of them.
+    target_edges, target_mids = time_grid(cfg)
+    generator_recipe = choose_generator_recipe(rng, cfg)
     sampler = DEMO_SAMPLERS.get(generator_recipe)
     if sampler is None:
         raise ValueError(f"Unknown demography sampler: {generator_recipe}")
 
-    breaks, values, meta = sampler(
-        rng,
-        sampler_cfg,
-        generation_edges,
-        generation_mids,
-    )
+    breaks, values, meta = sampler(rng, cfg, target_edges, target_mids)
     is_stress = "stress" in str(generator_recipe)
     breaks, values, growth_rates = _clean_demography(
         breaks,
@@ -1538,7 +1638,7 @@ def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msp
     meta = {
         **meta,
         **summarize_demography(
-            generation_edges,
+            target_edges,
             breaks,
             values,
             growth_rates,
@@ -1558,6 +1658,6 @@ def sample_custom_demography(rng: np.random.Generator, cfg: Config) -> tuple[msp
         "target_scale": "log10_Ne",
         "target_aggregation": "log_time_bin_average",
         "target_time_bins": int(cfg.time_bins),
-        "demography_generation_bins": int(cfg.demography_generation_bins),
+        "demography_resolution_log10": float(cfg.demography_resolution_log10),
     }
     return build_demography(breaks, values, growth_rates), y, meta

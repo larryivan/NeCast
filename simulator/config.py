@@ -185,11 +185,26 @@ class Config:
     compute_chunk_size: int = 16
     seq_len: int = 1_000_000
     n_haplotypes: int = 32
-    # Supervised target resolution. Population-history samplers use the
-    # separate generation grid below so changing label resolution cannot alter
-    # the latent history or consume a different random-number sequence.
+    # Supervised target resolution.  Nothing about the latent history depends
+    # on it: histories are continuous functions of time, discretised only far
+    # enough to represent them, so the label grid can move without moving the
+    # ground truth or the random-number stream.
     time_bins: int = 64
-    demography_generation_bins: int = 48
+    # How much log10 Ne error the piecewise-constant representation of a
+    # continuous history may carry.  A flat history costs one epoch and a rough
+    # one costs as many as it needs; msprime's cost is flat in epoch count, so
+    # this buys fidelity against metadata size and simulation time.
+    #
+    # It is set by the finest statistic the label carries, not by its RMSE.  The
+    # amplitude and total variation of the mixture have both converged by 0.02,
+    # and the label RMSE against an exact representation is 0.0001 there -- but
+    # half of all adjacent-bin steps in the label are smaller than 0.02, so a
+    # tolerance that size erases turning points: the median spectral walk turns
+    # 5 times at 0.05, 7 at 0.02, and 9 at 0.005 and below, and 9 is the human
+    # anchor the mixture is built against.  Costs 70 ms and 12.6 kB per row
+    # against 186 s of simulation, so the tail of the sweep is affordable and
+    # the body of it is not worth saving.
+    demography_resolution_log10: float = 0.005
     min_time: float = 50.0
     max_time: float = 500_000.0
 
@@ -393,7 +408,6 @@ def apply_preset(cfg: Config) -> Config:
         cfg.seq_len = 1_000_000
         cfg.n_haplotypes = 24
         cfg.time_bins = 64
-        cfg.demography_generation_bins = 32
         cfg.workers = 1
         cfg.enable_stdpopsim = False
         cfg.p_stdpopsim_anchor = 0.0
@@ -404,7 +418,6 @@ def apply_preset(cfg: Config) -> Config:
         cfg.seq_len = 10_000_000
         cfg.n_haplotypes = 64
         cfg.time_bins = 64
-        cfg.demography_generation_bins = 48
         cfg.workers = -1
         cfg.p_clean_constant = 0.25
         cfg.p_random_global = 0.20
@@ -418,7 +431,6 @@ def apply_preset(cfg: Config) -> Config:
         cfg.seq_len = 20_000_000
         cfg.n_haplotypes = 64
         cfg.time_bins = 64
-        cfg.demography_generation_bins = 48
         cfg.workers = -1
         cfg.p_clean_constant = 0.10
         cfg.p_random_global = 0.15
@@ -580,7 +592,6 @@ def validate_config(cfg: Config) -> None:
     seq_len = positive_integer("seq_len")
     n_haplotypes = positive_integer("n_haplotypes")
     positive_integer("time_bins")
-    positive_integer("demography_generation_bins")
 
     if n_haplotypes < 2:
         raise ValueError("n_haplotypes must be at least 2")
@@ -599,6 +610,9 @@ def validate_config(cfg: Config) -> None:
             "seq_len * n_haplotypes must fit in uint32 so sparse flat genotype indices remain representable"
         )
 
+    resolution = finite("demography_resolution_log10")
+    if resolution <= 0.0:
+        raise ValueError("demography_resolution_log10 must be greater than 0")
     min_time = finite("min_time")
     max_time = finite("max_time")
     if min_time <= 0.0:

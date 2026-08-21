@@ -25,22 +25,12 @@ def test_builtin_presets_are_valid(preset: str) -> None:
     validate_config(apply_preset(Config(preset=preset)))
 
 
-@pytest.mark.parametrize(
-    ("preset", "generation_bins"),
-    [
-        ("mini", 32),
-        ("core_v01", 48),
-        ("full_v01", 48),
-    ],
-)
-def test_builtin_presets_use_64_targets_without_changing_history_prior(
-    preset: str,
-    generation_bins: int,
-) -> None:
+@pytest.mark.parametrize("preset", ["mini", "core_v01", "full_v01"])
+def test_builtin_presets_target_64_bins(preset: str) -> None:
     cfg = apply_preset(Config(preset=preset))
 
     assert cfg.time_bins == 64
-    assert cfg.demography_generation_bins == generation_bins
+    assert cfg.demography_resolution_log10 > 0.0
 
 
 @pytest.mark.parametrize(
@@ -52,7 +42,8 @@ def test_builtin_presets_use_64_targets_without_changing_history_prior(
         ({"compute_chunk_size": 0}, "compute_chunk_size"),
         ({"seq_len": 0}, "seq_len"),
         ({"time_bins": 0}, "time_bins"),
-        ({"demography_generation_bins": 0}, "demography_generation_bins"),
+        ({"demography_resolution_log10": 0.0}, "demography_resolution_log10"),
+        ({"demography_resolution_log10": -1.0}, "demography_resolution_log10"),
         ({"n_haplotypes": 1}, "at least 2"),
         ({"n_haplotypes": 3}, "even"),
         ({"n_haplotypes": INT16_MAX + 1}, "int16"),

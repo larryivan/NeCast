@@ -144,7 +144,7 @@ def main() -> None:
     print(f"out_dir={cfg.out_dir}")
     print(
         f"preset={cfg.preset} seq_len={cfg.seq_len:,} H={cfg.n_haplotypes} "
-        f"target_T={cfg.time_bins} history_T={cfg.demography_generation_bins}"
+        f"target_T={cfg.time_bins} history_tol={cfg.demography_resolution_log10}"
     )
     print("=" * 80)
     sys.stdout.flush()

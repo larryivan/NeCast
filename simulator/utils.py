@@ -31,15 +31,6 @@ def time_grid(cfg: Config) -> tuple[np.ndarray, np.ndarray]:
     return log_time_grid(cfg.min_time, cfg.max_time, cfg.time_bins)
 
 
-def demography_generation_grid(cfg: Config) -> tuple[np.ndarray, np.ndarray]:
-    """Return the latent-history grid, independent of target resolution."""
-    return log_time_grid(
-        cfg.min_time,
-        cfg.max_time,
-        cfg.demography_generation_bins,
-    )
-
-
 def log_time_grid(
     min_time: float,
     max_time: float,

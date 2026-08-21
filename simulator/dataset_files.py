@@ -13,7 +13,7 @@ from .config import (
     validate_config,
 )
 from .dataset_state import SAMPLE_GENERATOR_SCHEMA_VERSION
-from .utils import demography_generation_grid, time_grid
+from .utils import time_grid
 
 
 README_TEMPLATE = """# {dataset_name}
@@ -67,27 +67,38 @@ for convenient filtering without making fixed train/validation/test splits.
 `generator_recipe_key` provides the same grouping at the fine-grained recipe
 level.
 
-Demography sampling uses a registry of named samplers rather than one large
-conditional block. It includes constant and near-constant controls, recent
-bottlenecks, recent founder recovery, native continuous exponential
-growth/decline, serial founder events, ancient+recent compound events,
-mild/strong continuous zigzag histories, dense bin-aligned histories, opt-in
-fixed `Zigzag_1S14` and SMC++ sawtooth validation models, and optional
-empirical human Ne templates inferred by tools such as SMC++, PHLaSH, and
-MSMC2. Continuous
-histories use msprime growth rates directly, and their labels are analytic
-log-time averages of the same trajectory. Metadata includes the full
-`demography_breaks`, `demography_values`, and `demography_growth_rates` needed
-to reconstruct the ground truth. The public `demography_type` is consolidated
-into interpretable scientific classes such as `constant`, `bottleneck`,
-`exponential_growth`, and `zigzag`; the exact original sampler name remains in
-`generator_recipe` for reproducibility. Summary fields include `n_epochs`,
-`has_recent_event`, `has_ancient_event`, `min_Ne`, `max_Ne`,
-`Ne_ratio_max_min`, `recent_min_Ne`, `ancient_mean_Ne`, `event_severity`, and
-`event_duration` for filtering and benchmark recipes. `event_severity` is
-uniformly `min_Ne / max_Ne`; any recipe-specific legacy definition is preserved
-Shape descriptors include `log10_ne_range`,
-`total_variation_log10`, `turn_count`, `direction`, and `trajectory_form`.
+Demography sampling uses a registry of twelve named samplers rather than one
+large conditional block: `constant`, `spectral_walk`, `size_event`,
+`multi_event`, `exponential`, `sawtooth`, `literature_sawtooth`, `bottleneck`,
+`event_on_background`, `ooa_chain`, `empirical_human_ne_template`, and
+`stdpopsim_single_pop`. An axis that is continuous in nature is one sampler
+with a continuous parameter rather than several pinned to points along it, and
+the realised parameters go in the metadata so any grouping can be made at
+analysis time.
+
+Every history is a function of continuous time. Nothing in the sampler reads
+the label resolution, so the target grid can move without moving the ground
+truth or the random-number stream. Curves reach msprime through
+`epochs_from_curve`, which is defined by an error bound rather than a bin
+count: adaptive bisection in log time until each epoch is within
+`demography_resolution_log10` of the curve it stands for, with the exact edges
+of box-shaped events forced to be breakpoints so an event starts when it starts.
+A flat history costs one epoch and a rough one costs as many as its roughness
+needs. Continuous histories use msprime growth rates directly, and their labels
+are analytic log-time averages of the same trajectory.
+
+Metadata includes the full `demography_breaks`, `demography_values`, and
+`demography_growth_rates` needed to reconstruct the ground truth, and for
+spectral histories the handful of scalars that regenerate the curve at any
+resolution. The public `demography_type` is consolidated into interpretable
+scientific classes such as `constant`, `bottleneck`, `exponential_growth`, and
+`zigzag`; the exact sampler name remains in `generator_recipe`. Summary fields
+include `n_epochs`, `has_recent_event`, `has_ancient_event`, `min_Ne`,
+`max_Ne`, `Ne_ratio_max_min`, `recent_min_Ne`, `ancient_mean_Ne`,
+`event_severity`, and `event_duration` for filtering and benchmark recipes.
+`event_severity` is uniformly `min_Ne / max_Ne`. Shape descriptors include
+`log10_ne_range`, `total_variation_log10`, `turn_count`, `direction`, and
+`trajectory_form`.
 Sample quality metadata includes `variant_density_per_mb`, explicit noise rates,
 missing genotype counts, phase switch counts, and observed map rate summaries
 (`mean/std/min/max`) for quick corpus filtering without reading the shard arrays.
@@ -533,46 +544,24 @@ def validate_dataset(data_dir):
     generator_schema_version = manifest.get("generator_schema_version")
     time_edges = manifest.get("time_edges")
     time_mids = manifest.get("time_mids")
-    demography_generation_bins = manifest.get("demography_generation_bins")
-    demography_generation_time_edges = manifest.get(
-        "demography_generation_time_edges"
-    )
-    demography_generation_time_mids = manifest.get(
-        "demography_generation_time_mids"
-    )
     assert isinstance(demography_type_ids, dict), "manifest has no demography type ID map"
     assert isinstance(generator_recipe_ids, dict), "manifest has no generator recipe ID map"
     assert (
         generator_schema_version == SUPPORTED_GENERATOR_SCHEMA_VERSION
     ), "unsupported generator schema"
     assert isinstance(time_mids, list) and time_mids, "manifest has no target time grid"
+    resolution = manifest.get("demography_resolution_log10")
     assert (
-        isinstance(demography_generation_bins, int)
-        and demography_generation_bins > 0
-    ), "manifest has no demography generation bin count"
+        isinstance(resolution, (int, float)) and float(resolution) > 0.0
+    ), "manifest has no demography resolution"
     target_bins = len(time_mids)
     assert isinstance(time_edges, list) and len(time_edges) == target_bins + 1, (
         "invalid target time edges"
     )
-    assert (
-        isinstance(demography_generation_time_edges, list)
-        and len(demography_generation_time_edges)
-        == demography_generation_bins + 1
-    ), "invalid demography generation time edges"
-    assert (
-        isinstance(demography_generation_time_mids, list)
-        and len(demography_generation_time_mids) == demography_generation_bins
-    ), "invalid demography generation time midpoints"
     target_edges = np.asarray(time_edges, dtype=float)
-    generation_edges = np.asarray(demography_generation_time_edges, dtype=float)
     assert np.isfinite(target_edges).all() and np.all(np.diff(target_edges) > 0), (
         "target time edges are invalid"
     )
-    assert np.isfinite(generation_edges).all() and np.all(np.diff(generation_edges) > 0), (
-        "demography generation time edges are invalid"
-    )
-    assert target_edges[0] == generation_edges[0], "time-grid lower endpoints differ"
-    assert target_edges[-1] == generation_edges[-1], "time-grid upper endpoints differ"
     assert df["sample_id"].is_unique, "sample_id values must be unique"
     for column in [
         "demography_type",
@@ -617,10 +606,9 @@ def validate_dataset(data_dir):
             assert int(meta.get("target_time_bins", -1)) == target_bins, (
                 "metadata target bin count mismatch"
             )
-            assert (
-                int(meta.get("demography_generation_bins", -1))
-                == demography_generation_bins
-            ), "metadata demography generation bin count mismatch"
+            assert float(
+                meta.get("demography_resolution_log10", -1.0)
+            ) == float(resolution), "metadata demography resolution mismatch"
             demography_type = str(meta.get("demography_type", ""))
             generator_recipe = str(meta.get("generator_recipe", ""))
             assert demography_type in demography_type_ids, "unknown demography_type"
@@ -828,12 +816,9 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
         tmp_path.replace(path)
 
     edges, mids = time_grid(cfg)
-    generation_edges, generation_mids = demography_generation_grid(cfg)
     config_dict = dataclasses.asdict(cfg)
     config_dict["time_edges"] = edges.tolist()
     config_dict["time_mids"] = mids.tolist()
-    config_dict["demography_generation_time_edges"] = generation_edges.tolist()
-    config_dict["demography_generation_time_mids"] = generation_mids.tolist()
     config_dict["source_ids"] = SOURCE_IDS
     config_dict["demography_type_ids"] = DEMOGRAPHY_TYPE_IDS
     config_dict["generator_recipe_ids"] = GENERATOR_RECIPE_IDS
@@ -850,9 +835,7 @@ def write_dataset_files(cfg: Config, sample_manifest: dict) -> None:
         "time_bins": int(cfg.time_bins),
         "time_edges": edges.tolist(),
         "time_mids": mids.tolist(),
-        "demography_generation_bins": int(cfg.demography_generation_bins),
-        "demography_generation_time_edges": generation_edges.tolist(),
-        "demography_generation_time_mids": generation_mids.tolist(),
+        "demography_resolution_log10": float(cfg.demography_resolution_log10),
         "source_ids": SOURCE_IDS,
         "demography_type_ids": DEMOGRAPHY_TYPE_IDS,
         "generator_recipe_ids": GENERATOR_RECIPE_IDS,

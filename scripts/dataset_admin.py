@@ -31,13 +31,11 @@ REQUIRED_NPZ_KEYS = {
     "n_haplotypes",
     "sequence_length",
     "obs_rec_pos",
-    "obs_rec_pos_offsets",
+    "obs_rec_offsets",
     "obs_rec_rate",
-    "obs_rec_rate_offsets",
     "obs_mut_pos",
-    "obs_mut_pos_offsets",
+    "obs_mut_offsets",
     "obs_mut_rate",
-    "obs_mut_rate_offsets",
 }
 
 
@@ -122,14 +120,15 @@ def check_shard(path: Path) -> list[str]:
         for prefix in ("obs_rec", "obs_mut"):
             pos = data[f"{prefix}_pos"]
             rate = data[f"{prefix}_rate"]
-            pos_offsets = data[f"{prefix}_pos_offsets"]
-            rate_offsets = data[f"{prefix}_rate_offsets"]
-            check_offsets(f"{prefix}_pos_offsets", pos_offsets, len(pos), n)
-            check_offsets(f"{prefix}_rate_offsets", rate_offsets, len(rate), n)
+            pos_offsets = data[f"{prefix}_offsets"]
+            check_offsets(f"{prefix}_offsets", pos_offsets, len(pos), n)
             check_monotone_by_offsets(f"{prefix}_pos", pos, pos_offsets)
-            for i, (pa, pb, ra, rb) in enumerate(zip(pos_offsets[:-1], pos_offsets[1:], rate_offsets[:-1], rate_offsets[1:])):
-                if (pb - pa) not in {rb - ra, rb - ra + 1}:
-                    raise ValueError(f"{path.name}: {prefix} pos/rate length mismatch in local sample {i}")
+            # One offsets array serves both: a rate lives between two
+            # breakpoints, so a row holds one fewer rate than positions.  The
+            # derived offsets have to land exactly on the rate array's end.
+            lengths = np.diff(np.asarray(pos_offsets, dtype=np.int64))
+            if int(np.maximum(lengths - 1, 0).sum()) != len(rate):
+                raise ValueError(f"{path.name}: {prefix} rate count disagrees with its offsets")
 
         if data["target_log10_ne"].shape[0] != n or not np.isfinite(data["target_log10_ne"]).all():
             raise ValueError(f"{path.name}: invalid target_log10_ne")

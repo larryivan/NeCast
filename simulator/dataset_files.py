@@ -212,6 +212,22 @@ class DLCoalSimShard:
         off = self.data[offsets_key]
         return self.data[key][off[i]:off[i + 1]]
 
+    def _map_slice(self, prefix, i):
+        """One row's map: its breakpoints and the rates between them.
+
+        A map stores one offsets array, not two.  A rate lives *between* two
+        breakpoints, so a row holds one fewer rate than positions -- clamped at
+        zero, because a row with no map holds none of either rather than minus
+        one rate.
+        """
+        offsets = self.data[f"{prefix}_offsets"]
+        lengths = np.diff(np.asarray(offsets, dtype=np.int64))
+        rate_starts = np.concatenate(([0], np.cumsum(np.maximum(lengths - 1, 0))))
+        return (
+            self.data[f"{prefix}_pos"][offsets[i]:offsets[i + 1]],
+            self.data[f"{prefix}_rate"][rate_starts[i]:rate_starts[i + 1]],
+        )
+
     def get(self, i, unpack=True):
         v0, v1 = self.data["variant_offsets"][i], self.data["variant_offsets"][i + 1]
         pos = self.data["variant_positions_bp"][v0:v1]
@@ -243,12 +259,12 @@ class DLCoalSimShard:
             "genotypes": G,
             "missing_mask": M,
             "observed_recombination": {
-                "position_bp": self._slice_offsets("obs_rec_pos", "obs_rec_pos_offsets", i),
-                "rate": self._slice_offsets("obs_rec_rate", "obs_rec_rate_offsets", i),
+                "position_bp": self._map_slice("obs_rec", i)[0],
+                "rate": self._map_slice("obs_rec", i)[1],
             },
             "observed_mutation": {
-                "position_bp": self._slice_offsets("obs_mut_pos", "obs_mut_pos_offsets", i),
-                "rate": self._slice_offsets("obs_mut_rate", "obs_mut_rate_offsets", i),
+                "position_bp": self._map_slice("obs_mut", i)[0],
+                "rate": self._map_slice("obs_mut", i)[1],
             },
             "target_log10_ne": self.data["target_log10_ne"][i],
         }

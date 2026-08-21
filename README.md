@@ -47,6 +47,19 @@ Time bins are log-spaced from 50 to 500,000 generations; `time_edges` in
 haplotype, `n_haplotypes` to a row. Missing calls are a sparse flat index (`missing_flat_idx`,
 `missing_offsets`) rather than a mask.
 
+A map stores one offsets array, not two. Its `*_pos` array holds the
+breakpoints and `*_rate` the rates *between* them, so a row holds one fewer
+rate than positions — none of either where a row has no map:
+
+```python
+offsets = shard["obs_rec_offsets"]
+lengths = np.diff(offsets.astype(np.int64))
+rate_at = np.concatenate(([0], np.cumsum(np.maximum(lengths - 1, 0))))
+
+breakpoints = shard["obs_rec_pos"][offsets[row]:offsets[row + 1]]
+rates       = shard["obs_rec_rate"][rate_at[row]:rate_at[row + 1]]
+```
+
 The maps come in two forms. `obs_rec_*` and `obs_mut_*` are what a method is
 allowed to see: a published map's resolution, its error, and its overall scale
 offset. `true_rec_*` and `true_mut_*` are what the sequence was actually

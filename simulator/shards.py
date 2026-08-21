@@ -214,6 +214,36 @@ def _campaign_activity_lock(
             handle.close()
 
 
+def map_rate_offsets(offsets: np.ndarray) -> np.ndarray:
+    """Where each row's rates begin, derived from where its positions do.
+
+    A map is stored with one offsets array rather than two, because the second
+    carries no information the first does not: a rate lives *between* two
+    breakpoints, so a row holds one fewer rate than it holds positions.  The
+    count is clamped at zero because a row with no map at all holds none of
+    either, not minus one rate -- which is the case a subtraction alone gets
+    wrong, and the reason this is a function rather than a note in the docs.
+    """
+
+    lengths = np.diff(np.asarray(offsets, dtype=np.int64))
+    return np.concatenate(([0], np.cumsum(np.maximum(lengths - 1, 0))))
+
+
+def map_slice(
+    positions: np.ndarray,
+    rates: np.ndarray,
+    offsets: np.ndarray,
+    row: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """One row's piecewise map: its breakpoints and the rates between them."""
+
+    rate_offsets = map_rate_offsets(offsets)
+    return (
+        positions[int(offsets[row]) : int(offsets[row + 1])],
+        rates[int(rate_offsets[row]) : int(rate_offsets[row + 1])],
+    )
+
+
 def concat_with_offsets(arrs: list[np.ndarray], dtype=None) -> tuple[np.ndarray, np.ndarray]:
     offsets = [0]
     total = 0
@@ -244,14 +274,19 @@ _GLOBAL_ARRAYS = (
 _OFFSET_ARRAY_PAIRS = (
     ("variant_positions_bp", "variant_offsets"),
     ("missing_flat_idx", "missing_offsets"),
-    ("obs_rec_pos", "obs_rec_pos_offsets"),
-    ("obs_rec_rate", "obs_rec_rate_offsets"),
-    ("obs_mut_pos", "obs_mut_pos_offsets"),
-    ("obs_mut_rate", "obs_mut_rate_offsets"),
-    ("true_rec_pos", "true_rec_pos_offsets"),
-    ("true_rec_rate", "true_rec_rate_offsets"),
-    ("true_mut_pos", "true_mut_pos_offsets"),
-    ("true_mut_rate", "true_mut_rate_offsets"),
+    ("obs_rec_pos", "obs_rec_offsets"),
+    ("obs_mut_pos", "obs_mut_offsets"),
+    ("true_rec_pos", "true_rec_offsets"),
+    ("true_mut_pos", "true_mut_offsets"),
+)
+# Arrays whose row layout is decided by another array's offsets rather than by
+# their own.  A rate sits between two breakpoints, so its rows are read through
+# the positions' offsets; concatenating it is all the merge has to do.
+_DERIVED_LAYOUT_ARRAYS = (
+    "obs_rec_rate",
+    "obs_mut_rate",
+    "true_rec_rate",
+    "true_mut_rate",
 )
 _BASE_ARRAY_ORDER = (
     "sample_id",
@@ -270,23 +305,19 @@ _BASE_ARRAY_ORDER = (
     "n_haplotypes",
     "sequence_length",
     "obs_rec_pos",
-    "obs_rec_pos_offsets",
+    "obs_rec_offsets",
     "obs_rec_rate",
-    "obs_rec_rate_offsets",
     "obs_mut_pos",
-    "obs_mut_pos_offsets",
+    "obs_mut_offsets",
     "obs_mut_rate",
-    "obs_mut_rate_offsets",
 )
 _TRUTH_ARRAY_ORDER = (
     "true_rec_pos",
-    "true_rec_pos_offsets",
+    "true_rec_offsets",
     "true_rec_rate",
-    "true_rec_rate_offsets",
     "true_mut_pos",
-    "true_mut_pos_offsets",
+    "true_mut_offsets",
     "true_mut_rate",
-    "true_mut_rate_offsets",
 )
 # Present when ``arg_detail`` is not "none".  The shard layout has to depend on
 # the setting rather than on which rows happened to be selected, so an
@@ -324,10 +355,10 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
     missing_flat_idx, missing_offsets = concat_with_offsets([s["missing_flat_idx"] for s in samples], dtype=np.uint32)
 
     # Positions float64, rates float32; see the note in ``sample.py``.
-    obs_rec_pos, obs_rec_pos_offsets = concat_with_offsets([s["obs_rec_pos"] for s in samples], dtype=np.float64)
-    obs_rec_rate, obs_rec_rate_offsets = concat_with_offsets([s["obs_rec_rate"] for s in samples], dtype=np.float32)
-    obs_mut_pos, obs_mut_pos_offsets = concat_with_offsets([s["obs_mut_pos"] for s in samples], dtype=np.float64)
-    obs_mut_rate, obs_mut_rate_offsets = concat_with_offsets([s["obs_mut_rate"] for s in samples], dtype=np.float32)
+    obs_rec_pos, obs_rec_offsets = concat_with_offsets([s["obs_rec_pos"] for s in samples], dtype=np.float64)
+    obs_rec_rate, _ = concat_with_offsets([s["obs_rec_rate"] for s in samples], dtype=np.float32)
+    obs_mut_pos, obs_mut_offsets = concat_with_offsets([s["obs_mut_pos"] for s in samples], dtype=np.float64)
+    obs_mut_rate, _ = concat_with_offsets([s["obs_mut_rate"] for s in samples], dtype=np.float32)
 
     arrays = dict(
         sample_id=ids,
@@ -349,29 +380,25 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
         n_haplotypes=np.array([cfg.n_haplotypes], dtype=np.int16),
         sequence_length=np.array([s["metadata"]["sequence_length"] for s in samples], dtype=np.int64),
         obs_rec_pos=obs_rec_pos,
-        obs_rec_pos_offsets=obs_rec_pos_offsets,
+        obs_rec_offsets=obs_rec_offsets,
         obs_rec_rate=obs_rec_rate,
-        obs_rec_rate_offsets=obs_rec_rate_offsets,
         obs_mut_pos=obs_mut_pos,
-        obs_mut_pos_offsets=obs_mut_pos_offsets,
+        obs_mut_offsets=obs_mut_offsets,
         obs_mut_rate=obs_mut_rate,
-        obs_mut_rate_offsets=obs_mut_rate_offsets,
     )
     if cfg.include_truth:
-        true_rec_pos, true_rec_pos_offsets = concat_with_offsets([s["true_rec_pos"] for s in samples], dtype=np.float64)
-        true_rec_rate, true_rec_rate_offsets = concat_with_offsets([s["true_rec_rate"] for s in samples], dtype=np.float32)
-        true_mut_pos, true_mut_pos_offsets = concat_with_offsets([s["true_mut_pos"] for s in samples], dtype=np.float64)
-        true_mut_rate, true_mut_rate_offsets = concat_with_offsets([s["true_mut_rate"] for s in samples], dtype=np.float32)
+        true_rec_pos, true_rec_offsets = concat_with_offsets([s["true_rec_pos"] for s in samples], dtype=np.float64)
+        true_rec_rate, _ = concat_with_offsets([s["true_rec_rate"] for s in samples], dtype=np.float32)
+        true_mut_pos, true_mut_offsets = concat_with_offsets([s["true_mut_pos"] for s in samples], dtype=np.float64)
+        true_mut_rate, _ = concat_with_offsets([s["true_mut_rate"] for s in samples], dtype=np.float32)
         arrays.update(
             true_rec_pos=true_rec_pos,
-            true_rec_pos_offsets=true_rec_pos_offsets,
+            true_rec_offsets=true_rec_offsets,
             true_rec_rate=true_rec_rate,
-            true_rec_rate_offsets=true_rec_rate_offsets,
-            true_mut_pos=true_mut_pos,
-            true_mut_pos_offsets=true_mut_pos_offsets,
+                true_mut_pos=true_mut_pos,
+            true_mut_offsets=true_mut_offsets,
             true_mut_rate=true_mut_rate,
-            true_mut_rate_offsets=true_mut_rate_offsets,
-        )
+            )
     if cfg.arg_detail != "none":
         # The genealogy summary: how many coalescences fell in each target time
         # bin, and how much branch length spanned it.  Two vectors of 64 floats
@@ -1038,10 +1065,13 @@ def _arrays_from_fragments(
                 data_key,
                 offsets_key,
             )
-        values["genotype_packed"] = np.concatenate(
-            [np.asarray(data["genotype_packed"]) for data in datasets],
-            axis=0,
-        )
+        for key in ("genotype_packed", *_DERIVED_LAYOUT_ARRAYS):
+            if key not in expected_keys:
+                continue
+            values[key] = np.concatenate(
+                [np.asarray(data[key]) for data in datasets],
+                axis=0,
+            )
 
         expected_ids = [
             f"sim_{index:08d}"
@@ -1420,14 +1450,12 @@ def _validate_completed_artifacts(manifest: dict, cfg: Config) -> None:
     }
     truth_arrays = {
         "true_rec_pos",
-        "true_rec_pos_offsets",
+        "true_rec_offsets",
         "true_rec_rate",
-        "true_rec_rate_offsets",
-        "true_mut_pos",
-        "true_mut_pos_offsets",
+            "true_mut_pos",
+        "true_mut_offsets",
         "true_mut_rate",
-        "true_mut_rate_offsets",
-    }
+        }
     plan_sha256 = manifest.get("generation_plan_sha256")
     if plan_sha256 is not None:
         if not isinstance(plan_sha256, str) or len(plan_sha256) != 64:

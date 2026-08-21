@@ -48,8 +48,8 @@ not precomputed in the core dataset.
 Shard files are written as lossless NPZ archives using the configured DEFLATE
 level. Missing genotypes are stored as sparse per-sample row-major indices
 (`missing_flat_idx`, `missing_offsets`) rather than as a dense missing matrix.
-Each sample stores a merged scientific `demography_type_id` and an append-only
-`generator_recipe_id`.
+Each sample stores a scientific `demography_type_id` and the finer
+`generator_recipe_id` naming the sampler that drew it.
 with the mappings in `config.json` or `manifest.json`.
 
 Targets are log-time bin averages, not midpoint samples. This keeps short
@@ -58,9 +58,6 @@ Every built-in preset writes 64 target bins. The target grid is deliberately
 separate from the latent population-history generation grid, so changing target
 resolution does not change the sampled history, genotype data, maps, or noise
 for a fixed seed. Both grids are recorded in `config.json` and `manifest.json`.
-When migrating a custom schema-v3 command, pass its old `time_bins` value as
-`--demography-generation-bins` to reproduce the old latent prior, then choose
-the v4 target resolution separately with `--time-bins`.
 Main simulator samples are generated as diploid individuals (`ploidy=2`), so
 `n_haplotypes` must be even. Phase switch noise swaps the two haplotypes within
 each diploid individual after sampled switch points; this is recorded as

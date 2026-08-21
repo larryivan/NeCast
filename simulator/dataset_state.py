@@ -9,19 +9,14 @@ from typing import Any
 
 
 FINGERPRINT_VERSION = 1
-# Bump whenever identical Config values would produce meaningfully different
-# samples or shard semantics.
-# 5: the four random-walk demography samplers became one spectral walk, so
-# every label in a v4 dataset comes from a mixture this generator no longer
-# produces and the two cannot be pooled.
-# 6: 27 named scenario recipes became 11, the event families became
-# continuous parameterisations, and the held-out stdpopsim catalogue was
-# added, so a v5 label comes from a mixture this generator no longer has.
-# 7: map breakpoint positions moved from float32 to float64, so a sequence
-# longer than 2**24 base pairs no longer rounds them; the genealogy summary
-# arrays were added; and the metadata row grew the fields that were being
-# dropped on the way to disk, ``held_out_evaluation`` among them.
-SAMPLE_GENERATOR_SCHEMA_VERSION = 7
+# The on-disk contract: what arrays a shard holds, what each one means, and
+# what the label is.  A reader checks it before anything else and refuses a
+# dataset it does not recognise, because two schemas cannot be pooled -- the
+# labels come from different mixtures and the arrays have different dtypes.
+#
+# Bump it whenever identical Config values would produce meaningfully different
+# samples or shard semantics, and say here what changed.
+SAMPLE_GENERATOR_SCHEMA_VERSION = 1
 DONE_CONFIG_STATE_KEY = "sample_generation_config"
 RUNTIME_CONFIG_FIELDS = frozenset(
     {

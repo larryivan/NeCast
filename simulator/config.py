@@ -178,7 +178,7 @@ class Config:
     out_dir: str = "./DLCoalSim-Out"
     seed: int = 12345
     force: bool = False
-    demography_mixture_version: str = "v1.1-continuous-scenarios"
+    demography_mixture_version: str = "v1"
 
     n_samples: int = 2000
     shard_size: int = 64

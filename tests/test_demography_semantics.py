@@ -642,12 +642,21 @@ def test_the_oscillation_strength_is_continuous_rather_than_a_boolean() -> None:
     assert len(interior) > 0.5 * len(strengths)
 
 
-def test_demography_semantic_version_was_bumped() -> None:
+def test_the_declared_versions_match_what_the_generator_writes() -> None:
+    """Two versions travel with a dataset and they say different things.
+
+    ``demography_mixture_version`` names the mixture a label was drawn from;
+    ``SAMPLE_GENERATOR_SCHEMA_VERSION`` names the on-disk contract a reader has
+    to understand.  Both are refused rather than adapted to when they do not
+    match, because labels from two mixtures cannot be pooled and arrays from
+    two schemas do not have the same dtypes.
+    """
+
     cfg = Config()
-    assert cfg.demography_mixture_version == "v1.1-continuous-scenarios"
+    assert cfg.demography_mixture_version == "v1"
     # The held-out catalogue must carry weight.  At zero it is never drawn,
     # which leaves nothing to evaluate on -- an evaluation set still has to be
     # generated before it can be held out.
     assert cfg.p_stdpopsim_single_pop > 0.0
     assert cfg.p_spectral_walk == pytest.approx(0.20)
-    assert SAMPLE_GENERATOR_SCHEMA_VERSION == 7
+    assert SAMPLE_GENERATOR_SCHEMA_VERSION == 1

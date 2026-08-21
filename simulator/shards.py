@@ -22,6 +22,13 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from .atomic_io import (
+    canonical_sha256,
+    file_sha256,
+    fsync_directory,
+    read_json,
+    write_json_atomic,
+)
 from .config import (
     DEMOGRAPHY_PROB_FIELDS,
     DEMOGRAPHY_TYPE_IDS,
@@ -633,18 +640,11 @@ def _canonical_json_sha256(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
 
 def _file_record(path: Path) -> dict[str, int | str]:
     return {
         "size_bytes": int(path.stat().st_size),
-        "sha256": _file_sha256(path),
+        "sha256": file_sha256(path),
     }
 
 
@@ -667,22 +667,13 @@ def _file_record_matches(
         or path.stat().st_size != size
     ):
         return False
-    return not full_hash or _file_sha256(path) == digest
+    return not full_hash or file_sha256(path) == digest
 
 
 def _fsync_file(path: Path) -> None:
     with path.open("rb") as handle:
         os.fsync(handle.fileno())
 
-
-def _fsync_directory(path: Path) -> None:
-    if os.name == "nt":
-        return
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 @contextmanager
@@ -952,9 +943,9 @@ def _generate_or_resume_fragment(task: tuple[int, int, int, int]) -> dict:
         metadata_path = npz_path.with_suffix(".jsonl.gz")
         _fsync_file(npz_path)
         _fsync_file(metadata_path)
-        _fsync_directory(npz_path.parent)
+        fsync_directory(npz_path.parent)
         receipt = _fragment_receipt(result, cfg, plan_sha256)
-        _write_json_atomic(_fragment_receipt_path(samples_dir, task[0]), receipt)
+        write_json_atomic(_fragment_receipt_path(samples_dir, task[0]), receipt)
         committed = _load_committed_fragment_result(
             task,
             cfg,
@@ -1361,27 +1352,6 @@ def _load_json_object(path: Path, description: str) -> dict:
         )
     return value
 
-
-def _write_json_atomic(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(
-        f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
-    )
-    try:
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            json.dump(
-                value,
-                handle,
-                indent=2,
-                ensure_ascii=False,
-                allow_nan=False,
-            )
-            handle.flush()
-            os.fsync(handle.fileno())
-        tmp_path.replace(path)
-        _fsync_directory(path.parent)
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 def _artifact_reuse_error(message: str) -> DatasetConfigMismatchError:
@@ -2212,7 +2182,7 @@ def _prepare_or_load_plan_locked(
         samples_dir.mkdir(parents=True, exist_ok=True)
 
     plan = _build_generation_plan(cfg, empirical)
-    _write_json_atomic(plan_path, plan)
+    write_json_atomic(plan_path, plan)
     return "plan", plan
 
 
@@ -2487,7 +2457,7 @@ def _generate_rank_while_active(
         "generated_chunks": generated_chunks,
         "reused_chunks": reused_chunks,
     }
-    _write_json_atomic(
+    write_json_atomic(
         _rank_receipt_path(samples_dir, world_size, rank),
         rank_result,
     )
@@ -2658,7 +2628,7 @@ def _merge_committed_shard(
         metadata_path = npz_path.with_suffix(".jsonl.gz")
         _fsync_file(npz_path)
         _fsync_file(metadata_path)
-        _fsync_directory(samples_dir)
+        fsync_directory(samples_dir)
         _validate_sample_artifact_pair(
             npz_path,
             metadata_path,
@@ -2681,7 +2651,7 @@ def _merge_committed_shard(
             plan_sha256,
             counts,
         )
-        _write_json_atomic(_final_receipt_path(samples_dir, shard_idx), receipt)
+        write_json_atomic(_final_receipt_path(samples_dir, shard_idx), receipt)
         committed = _load_committed_final_result(
             final_task,
             cfg,
@@ -2741,7 +2711,7 @@ def _write_metadata_from_shards(
             f"aggregate metadata contains {row_count} rows, expected {expected_count}"
         )
     csv_tmp.replace(csv_path)
-    _fsync_directory(meta_dir)
+    fsync_directory(meta_dir)
     paths = {
         "summary_csv": "metadata/samples.csv",
         "full_jsonl_gz": "metadata/samples.jsonl.gz",
@@ -2756,7 +2726,7 @@ def _write_metadata_from_shards(
             pd.DataFrame(summary_rows).to_parquet(parquet_tmp, index=False)
             _fsync_file(parquet_tmp)
             parquet_tmp.replace(parquet_path)
-            _fsync_directory(meta_dir)
+            fsync_directory(meta_dir)
             paths["summary_parquet"] = "metadata/samples.parquet"
         except Exception:
             parquet_tmp.unlink(missing_ok=True)
@@ -2779,7 +2749,7 @@ def _write_metadata_from_shards(
         )
     _fsync_file(full_tmp)
     full_tmp.replace(full_path)
-    _fsync_directory(meta_dir)
+    fsync_directory(meta_dir)
     return paths
 
 
@@ -2923,7 +2893,7 @@ def _finalize_dataset_while_quiescent(cfg: Config) -> dict:
     manifest = stamp_done_manifest(manifest, cfg)
     manifest["done_manifest_sha256"] = _canonical_json_sha256(manifest)
     _validate_completed_artifacts(manifest, cfg)
-    _write_json_atomic(done, manifest)
+    write_json_atomic(done, manifest)
     _remove_fragment_artifacts(_fragment_dir(samples_dir))
     return manifest
 

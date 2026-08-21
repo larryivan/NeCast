@@ -86,6 +86,12 @@ def _canonical_json(value: object) -> str:
 
 
 def _json_compatible(value: object) -> Any:
+    """Cache-key values, sorted so that equal keys encode identically.
+
+    ``dataset_state`` has a function of the same name and a different
+    contract; see the note there.
+    """
+
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):

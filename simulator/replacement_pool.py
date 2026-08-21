@@ -15,6 +15,7 @@ runtime-censoring mechanism and is declared as such in ``SELECTION.json``.
 
 from __future__ import annotations
 
+import functools
 import argparse
 import dataclasses
 import fcntl
@@ -29,6 +30,13 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 from . import replacement as v1
+from .atomic_io import (
+    canonical_sha256,
+    file_sha256,
+    fsync_directory,
+    read_json,
+    write_json_atomic,
+)
 from .dataset_state import generation_config_state
 
 
@@ -54,55 +62,10 @@ class ReplacementPoolError(ValueError):
     """Raised when a candidate pool cannot be proven safe."""
 
 
-def _canonical_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+# Reading a malformed receipt is this module's own failure, so the error
+# type travels with the reader rather than being repeated at every call.
+_read_json = functools.partial(read_json, error=ReplacementPoolError)
 
-
-def _canonical_sha256(value: object) -> str:
-    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _read_json(path: Path, label: str) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ReplacementPoolError(f"{label} at {path} is unreadable: {exc}") from exc
-    if not isinstance(value, dict):
-        raise ReplacementPoolError(f"{label} at {path} is not a JSON object")
-    return value
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("wb") as handle:
-            handle.write(_canonical_bytes(value))
-            handle.write(b"\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _require_int(
@@ -129,7 +92,7 @@ def _artifact_record(path: Path, *, relative_to: Path) -> dict[str, Any]:
     return {
         "path": relative,
         "size_bytes": resolved.stat().st_size,
-        "sha256": _file_sha256(resolved),
+        "sha256": file_sha256(resolved),
     }
 
 
@@ -247,7 +210,7 @@ def _validate_pool_plan_shape(plan: Mapping[str, Any], output: Path) -> None:
     sources = plan.get("sources")
     if not isinstance(sources, list) or not sources:
         raise ReplacementPoolError("pool plan has no source snapshots")
-    if plan.get("source_snapshot_sha256") != _canonical_sha256(sources):
+    if plan.get("source_snapshot_sha256") != canonical_sha256(sources):
         raise ReplacementPoolError("pool source snapshot fingerprint is inconsistent")
 
     candidate_config = plan.get("candidate_config")
@@ -300,7 +263,7 @@ def _load_pool_plan(out_dir: str | os.PathLike[str]) -> dict[str, Any]:
     plan = _read_json(path, "replacement pool plan")
     unsigned = dict(plan)
     recorded = unsigned.pop("pool_plan_sha256", None)
-    if not isinstance(recorded, str) or recorded != _canonical_sha256(unsigned):
+    if not isinstance(recorded, str) or recorded != canonical_sha256(unsigned):
         raise ReplacementPoolError("pool plan fingerprint is inconsistent")
     _validate_pool_plan_shape(plan, output)
     return plan
@@ -324,7 +287,7 @@ def _validate_generation_plan(
     path = output / str(plan["generation_plan_path"])
     if (
         generation_plan.get("plan_sha256") != plan.get("generation_plan_sha256")
-        or _file_sha256(path) != plan.get("generation_plan_file_sha256")
+        or file_sha256(path) != plan.get("generation_plan_file_sha256")
     ):
         raise ReplacementPoolError("candidate generation PLAN changed after prepare")
     return generation_plan
@@ -342,7 +305,7 @@ def _empty_registry(plan: Mapping[str, Any]) -> dict[str, Any]:
         "registration_count": 0,
         "registrations": [],
     }
-    registry["registry_sha256"] = _canonical_sha256(registry)
+    registry["registry_sha256"] = canonical_sha256(registry)
     return registry
 
 
@@ -383,7 +346,7 @@ def _validate_registration(
         "sample_index": index,
         "seed": expected["seed"],
     }
-    if registration.get("metadata_identity_sha256") != _canonical_sha256(identity):
+    if registration.get("metadata_identity_sha256") != canonical_sha256(identity):
         raise ReplacementPoolError("registration metadata identity hash is invalid")
 
 
@@ -396,7 +359,7 @@ def _load_registry(
     registry = _read_json(path, "replacement registration registry")
     unsigned = dict(registry)
     recorded = unsigned.pop("registry_sha256", None)
-    if not isinstance(recorded, str) or recorded != _canonical_sha256(unsigned):
+    if not isinstance(recorded, str) or recorded != canonical_sha256(unsigned):
         raise ReplacementPoolError("registration registry fingerprint is inconsistent")
     if (
         registry.get("schema") != REGISTRY_SCHEMA
@@ -440,8 +403,8 @@ def _write_registry(path: Path, registry: dict[str, Any]) -> None:
     unsigned = dict(registry)
     unsigned.pop("registry_sha256", None)
     registry = unsigned
-    registry["registry_sha256"] = _canonical_sha256(registry)
-    _write_json_atomic(path, registry)
+    registry["registry_sha256"] = canonical_sha256(registry)
+    write_json_atomic(path, registry)
 
 
 @contextmanager
@@ -514,7 +477,7 @@ def _validate_candidate_artifacts(
     for name in ("npz", "metadata_jsonl_gz"):
         artifact = source_artifacts[name]
         path = output / str(artifact["path"])
-        if _file_sha256(path) != artifact["sha256"]:
+        if file_sha256(path) != artifact["sha256"]:
             raise ReplacementPoolError(
                 f"candidate {candidate_index} {name} SHA256 mismatch"
             )
@@ -530,7 +493,7 @@ def _validate_candidate_artifacts(
         "generation_plan_sha256": plan["generation_plan_sha256"],
         "receipt_sha256": str(receipt["receipt_sha256"]),
         "source_artifacts": source_artifacts,
-        "metadata_identity_sha256": _canonical_sha256(identity),
+        "metadata_identity_sha256": canonical_sha256(identity),
     }
 
 
@@ -545,7 +508,7 @@ def _link_verified(
     if destination.exists():
         if (
             destination.stat().st_size != int(expected["size_bytes"])
-            or _file_sha256(destination) != expected["sha256"]
+            or file_sha256(destination) != expected["sha256"]
         ):
             raise ReplacementPoolError(
                 f"existing sealed artifact differs: {destination}"
@@ -559,7 +522,7 @@ def _link_verified(
             ) from exc
     if (
         destination.stat().st_size != int(expected["size_bytes"])
-        or _file_sha256(destination) != expected["sha256"]
+        or file_sha256(destination) != expected["sha256"]
     ):
         raise ReplacementPoolError(f"sealed artifact verification failed: {destination}")
     return {
@@ -694,7 +657,7 @@ def _freeze_selection(
             set(range(int(plan["candidate_count"]))) - set(selected_indices)
         ),
         "selected_candidates": selected,
-        "selected_candidates_sha256": _canonical_sha256(selected),
+        "selected_candidates_sha256": canonical_sha256(selected),
         "sealed_view": {
             "root": SEALED_DIR_NAME,
             "pool_plan": sealed_pool_plan,
@@ -702,14 +665,14 @@ def _freeze_selection(
             "selected_artifact_count": 3 * len(selected),
         },
     }
-    selection["selection_sha256"] = _canonical_sha256(selection)
+    selection["selection_sha256"] = canonical_sha256(selection)
     path = output / SELECTION_NAME
     if path.exists():
         existing = _load_selection(output, plan, registry=registry)
         if existing != selection:
             raise ReplacementPoolError("existing selection differs from frozen prefix")
         return existing
-    _write_json_atomic(path, selection)
+    write_json_atomic(path, selection)
     return _load_selection(output, plan, registry=registry)
 
 
@@ -727,7 +690,7 @@ def _validate_sealed_artifact(
     if (
         not path.is_file()
         or path.stat().st_size != int(sealed["size_bytes"])
-        or _file_sha256(path) != sealed["sha256"]
+        or file_sha256(path) != sealed["sha256"]
     ):
         raise ReplacementPoolError(f"sealed artifact is missing or corrupt: {path}")
 
@@ -742,7 +705,7 @@ def _load_selection(
     selection = _read_json(path, "replacement pool selection")
     unsigned = dict(selection)
     recorded = unsigned.pop("selection_sha256", None)
-    if not isinstance(recorded, str) or recorded != _canonical_sha256(unsigned):
+    if not isinstance(recorded, str) or recorded != canonical_sha256(unsigned):
         raise ReplacementPoolError("selection fingerprint is inconsistent")
     required_k = int(plan["required_k"])
     candidate_count = int(plan["candidate_count"])
@@ -763,14 +726,14 @@ def _load_selection(
         or selection.get("candidate_groups") != plan.get("candidate_groups")
     ):
         raise ReplacementPoolError("selection contract is inconsistent")
-    if selection.get("pool_plan_file_sha256") != _file_sha256(
+    if selection.get("pool_plan_file_sha256") != file_sha256(
         output / POOL_PLAN_NAME
     ):
         raise ReplacementPoolError("selection pool plan file hash changed")
     selected = selection.get("selected_candidates")
     if not isinstance(selected, list) or len(selected) != required_k:
         raise ReplacementPoolError("selection has the wrong selected count")
-    if selection.get("selected_candidates_sha256") != _canonical_sha256(selected):
+    if selection.get("selected_candidates_sha256") != canonical_sha256(selected):
         raise ReplacementPoolError("selected candidate fingerprint is inconsistent")
     indices: list[int] = []
     seeds: list[int] = []
@@ -934,7 +897,7 @@ def prepare_pool(
                 f"candidate generator prepare failed: {exc}"
             ) from exc
         generation_plan_sha256 = str(generation_plan["plan_sha256"])
-        generation_plan_file_sha256 = _file_sha256(
+        generation_plan_file_sha256 = file_sha256(
             output / "samples" / "PLAN.json"
         )
 
@@ -964,7 +927,7 @@ def prepare_pool(
             shard_size=shard_size,
         ),
         "selection_contract": _selection_contract(required_k),
-        "source_snapshot_sha256": _canonical_sha256(snapshots),
+        "source_snapshot_sha256": canonical_sha256(snapshots),
         "sources": snapshots,
         "source_provenance": source_provenance,
         "immutable_generator": {
@@ -980,8 +943,8 @@ def prepare_pool(
         "generation_plan_file_sha256": generation_plan_file_sha256,
         "generation_plan_sha256": generation_plan_sha256,
     }
-    plan["pool_plan_sha256"] = _canonical_sha256(plan)
-    _write_json_atomic(existing_path, plan)
+    plan["pool_plan_sha256"] = canonical_sha256(plan)
+    write_json_atomic(existing_path, plan)
     plan = _load_pool_plan(output)
 
     if required_k == 0:

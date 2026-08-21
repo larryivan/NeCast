@@ -429,7 +429,7 @@ def test_finalizer_recovers_orphan_final_shard_after_interruption(
         rank=0,
         world_size=1,
     )
-    original_write_json = shards._write_json_atomic
+    original_write_json = shards.write_json_atomic
     interrupted = False
 
     def fail_second_shard_receipt(path: Path, value: dict) -> None:
@@ -439,14 +439,14 @@ def test_finalizer_recovers_orphan_final_shard_after_interruption(
             raise RuntimeError("simulated finalizer interruption")
         original_write_json(path, value)
 
-    monkeypatch.setattr(shards, "_write_json_atomic", fail_second_shard_receipt)
+    monkeypatch.setattr(shards, "write_json_atomic", fail_second_shard_receipt)
     with pytest.raises(RuntimeError, match="finalizer interruption"):
         finalize_dataset(cfg)
     first_receipt = out_dir / "samples" / ".receipts" / "shard_00000.done.json"
     first_receipt_bytes = first_receipt.read_bytes()
     assert not (out_dir / "samples" / "DONE.json").exists()
 
-    monkeypatch.setattr(shards, "_write_json_atomic", original_write_json)
+    monkeypatch.setattr(shards, "write_json_atomic", original_write_json)
     assert finalize_dataset(cfg)["n_samples"] == 4
     assert first_receipt.read_bytes() == first_receipt_bytes
 
@@ -463,7 +463,7 @@ def test_single_fragment_finalize_never_consumes_checkpoint_before_receipt(
         rank=0,
         world_size=1,
     )
-    original_write_json = shards._write_json_atomic
+    original_write_json = shards.write_json_atomic
     interrupted = False
 
     def fail_first_shard_receipt(path: Path, value: dict) -> None:
@@ -473,7 +473,7 @@ def test_single_fragment_finalize_never_consumes_checkpoint_before_receipt(
             raise RuntimeError("simulated pair-commit interruption")
         original_write_json(path, value)
 
-    monkeypatch.setattr(shards, "_write_json_atomic", fail_first_shard_receipt)
+    monkeypatch.setattr(shards, "write_json_atomic", fail_first_shard_receipt)
     with pytest.raises(RuntimeError, match="pair-commit interruption"):
         finalize_dataset(cfg)
 
@@ -484,7 +484,7 @@ def test_single_fragment_finalize_never_consumes_checkpoint_before_receipt(
     assert fragment.with_suffix(".jsonl.gz").is_file()
     assert fragment.with_name("fragment_00000000.done.json").is_file()
 
-    monkeypatch.setattr(shards, "_write_json_atomic", original_write_json)
+    monkeypatch.setattr(shards, "write_json_atomic", original_write_json)
     assert finalize_dataset(cfg)["n_samples"] == 4
 
 
@@ -511,17 +511,17 @@ def test_invalid_existing_final_receipt_is_never_resigned(
         rank=0,
         world_size=1,
     )
-    original_write_json = shards._write_json_atomic
+    original_write_json = shards.write_json_atomic
 
     def fail_done(path: Path, value: dict) -> None:
         if path.name == "DONE.json":
             raise RuntimeError("simulated DONE interruption")
         original_write_json(path, value)
 
-    monkeypatch.setattr(shards, "_write_json_atomic", fail_done)
+    monkeypatch.setattr(shards, "write_json_atomic", fail_done)
     with pytest.raises(RuntimeError, match="DONE interruption"):
         finalize_dataset(cfg)
-    monkeypatch.setattr(shards, "_write_json_atomic", original_write_json)
+    monkeypatch.setattr(shards, "write_json_atomic", original_write_json)
 
     shard_path = out_dir / "samples" / "shard_00000.npz"
     receipt_path = (
@@ -549,17 +549,17 @@ def test_final_shard_without_receipt_is_never_trusted(
         rank=0,
         world_size=1,
     )
-    original_write_json = shards._write_json_atomic
+    original_write_json = shards.write_json_atomic
 
     def fail_done(path: Path, value: dict) -> None:
         if path.name == "DONE.json":
             raise RuntimeError("simulated DONE interruption")
         original_write_json(path, value)
 
-    monkeypatch.setattr(shards, "_write_json_atomic", fail_done)
+    monkeypatch.setattr(shards, "write_json_atomic", fail_done)
     with pytest.raises(RuntimeError, match="DONE interruption"):
         finalize_dataset(cfg)
-    monkeypatch.setattr(shards, "_write_json_atomic", original_write_json)
+    monkeypatch.setattr(shards, "write_json_atomic", original_write_json)
 
     shard_path = out_dir / "samples" / "shard_00000.npz"
     receipt_path = (

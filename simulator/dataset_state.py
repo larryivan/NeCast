@@ -42,6 +42,15 @@ def _as_mapping(config: Any) -> dict[str, Any]:
 
 
 def _json_compatible(value: Any) -> Any:
+    """Config values, for the fingerprint that decides whether a run resumes.
+
+    ``map_cache`` has a function of the same name and a different contract: it
+    encodes cache keys, so it sorts and rejects non-finite floats.  This one
+    keeps insertion order, which is part of what it hashes, and accepts
+    dataclasses, because a Config is one.  Merging them would move every
+    fingerprint.
+    """
+
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return _json_compatible(dataclasses.asdict(value))
     if isinstance(value, Mapping):

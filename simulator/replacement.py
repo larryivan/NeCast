@@ -8,6 +8,7 @@ to the original generator checkout and Python interpreter.
 
 from __future__ import annotations
 
+import functools
 import argparse
 import dataclasses
 import hashlib
@@ -21,6 +22,14 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .shards import _shard_tasks
+from .atomic_io import (
+    canonical_sha256,
+    file_sha256,
+    fsync_directory,
+    read_json,
+    write_json_atomic,
+)
 from .config import Config, validate_config
 from .dataset_state import (
     DONE_CONFIG_STATE_KEY,
@@ -45,55 +54,10 @@ class ReplacementPlanError(ValueError):
     """Raised when a replacement cannot be proven safe."""
 
 
-def _canonical_sha256(value: object) -> str:
-    encoded = json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+# Reading a malformed receipt is this module's own failure, so the error
+# type travels with the reader rather than being repeated at every call.
+_read_json = functools.partial(read_json, error=ReplacementPlanError)
 
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _read_json(path: Path, description: str) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ReplacementPlanError(
-            f"{description} at {path} is unreadable: {exc}"
-        ) from exc
-    if not isinstance(value, dict):
-        raise ReplacementPlanError(f"{description} at {path} is not a JSON object")
-    return value
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(
-                value,
-                handle,
-                indent=2,
-                ensure_ascii=False,
-                allow_nan=False,
-            )
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _require_sha256(value: object, description: str) -> str:
@@ -177,7 +141,7 @@ def _validate_source_plan(root: Path) -> tuple[dict[str, Any], Config]:
     plan = _read_json(plan_path, "source PLAN")
     persisted = dict(plan)
     recorded_sha = persisted.pop("plan_sha256", None)
-    if _require_sha256(recorded_sha, f"{root}: plan_sha256") != _canonical_sha256(
+    if _require_sha256(recorded_sha, f"{root}: plan_sha256") != canonical_sha256(
         persisted
     ):
         raise ReplacementPlanError(f"{root}: PLAN fingerprint is inconsistent")
@@ -205,7 +169,7 @@ def _validate_source_plan(root: Path) -> tuple[dict[str, Any], Config]:
         "partition_rule": "chunk_idx_mod_world_size",
         "array_schema_version": SAMPLE_GENERATOR_SCHEMA_VERSION,
     }
-    if layout != expected_layout or plan.get("layout_sha256") != _canonical_sha256(
+    if layout != expected_layout or plan.get("layout_sha256") != canonical_sha256(
         expected_layout
     ):
         raise ReplacementPlanError(f"{root}: PLAN fragment layout is inconsistent")
@@ -218,12 +182,6 @@ def _validate_source_plan(root: Path) -> tuple[dict[str, Any], Config]:
         _require_sha256(plan.get(name), f"{root}: {name}")
     return plan, cfg
 
-
-def _shard_tasks(n_samples: int, shard_size: int) -> list[tuple[int, int, int]]:
-    return [
-        (index, start, min(shard_size, n_samples - start))
-        for index, start in enumerate(range(0, n_samples, shard_size))
-    ]
 
 
 def _chunk_tasks(
@@ -296,7 +254,7 @@ def _receipt_record(
     recorded = persisted.pop("receipt_sha256", None)
     if _require_sha256(
         recorded, f"{receipt_path}: receipt_sha256"
-    ) != _canonical_sha256(persisted):
+    ) != canonical_sha256(persisted):
         raise ReplacementPlanError(f"{receipt_path}: receipt fingerprint is inconsistent")
     if receipt.get("schema_version") != 1 or receipt.get("plan_sha256") != plan_sha256:
         raise ReplacementPlanError(f"{receipt_path}: receipt schema/PLAN mismatch")
@@ -439,7 +397,7 @@ def _scan_source(root: Path) -> dict[str, Any]:
     completed = sum(int(item["n_samples"]) for item in ordered)
     return {
         "root": str(root),
-        "plan_file_sha256": _file_sha256(samples / "PLAN.json"),
+        "plan_file_sha256": file_sha256(samples / "PLAN.json"),
         "plan_sha256": plan["plan_sha256"],
         "planned_n_samples": cfg.n_samples,
         "seed": cfg.seed,
@@ -450,7 +408,7 @@ def _scan_source(root: Path) -> dict[str, Any]:
         "selected_final_receipts": len(final_paths),
         "selected_fragment_receipts": len(ordered) - len(final_paths),
         "ignored_fragments_covered_by_final": ignored_fragments,
-        "selected_receipts_sha256": _canonical_sha256(ordered),
+        "selected_receipts_sha256": canonical_sha256(ordered),
         "selected_receipts": ordered,
         "scientific_config": plan[DONE_CONFIG_STATE_KEY]["config"],
         "empirical_maps_sha256": plan["empirical_maps_sha256"],
@@ -694,7 +652,7 @@ def _load_replacement_plan(out_dir: Path) -> dict[str, Any]:
     recorded = persisted.pop("replacement_plan_sha256", None)
     if _require_sha256(
         recorded, "replacement_plan_sha256"
-    ) != _canonical_sha256(persisted):
+    ) != canonical_sha256(persisted):
         raise ReplacementPlanError("replacement plan fingerprint is inconsistent")
     if plan.get("schema_version") != SCHEMA_VERSION or plan.get("kind") != "dlcoalsim_tail_replacement":
         raise ReplacementPlanError("unsupported replacement plan schema")
@@ -819,7 +777,7 @@ def prepare_replacement(
         "deficit_samples": deficit,
         "tail_seed": tail_seed,
         "seed_stride": SEED_STRIDE,
-        "source_snapshot_sha256": _canonical_sha256(snapshots),
+        "source_snapshot_sha256": canonical_sha256(snapshots),
         "sources": snapshots,
         "source_provenance": {
             key: snapshots[0][key]
@@ -839,8 +797,8 @@ def prepare_replacement(
             None if generation_plan is None else generation_plan["plan_sha256"]
         ),
     }
-    plan["replacement_plan_sha256"] = _canonical_sha256(plan)
-    _write_json_atomic(existing_plan_path, plan)
+    plan["replacement_plan_sha256"] = canonical_sha256(plan)
+    write_json_atomic(existing_plan_path, plan)
     return plan
 
 
@@ -925,15 +883,15 @@ def finalize_replacement(out_dir: str | os.PathLike[str]) -> dict[str, Any]:
         "replacement_plan_sha256": plan["replacement_plan_sha256"],
         "deficit_samples": plan["deficit_samples"],
         "samples_done_path": "samples/DONE.json",
-        "samples_done_file_sha256": _file_sha256(samples_done),
+        "samples_done_file_sha256": file_sha256(samples_done),
     }
-    completion["replacement_done_sha256"] = _canonical_sha256(completion)
+    completion["replacement_done_sha256"] = canonical_sha256(completion)
     if done_path.exists():
         existing = _read_json(done_path, "replacement completion")
         if existing != completion:
             raise ReplacementPlanError(f"{done_path} contains a different completion")
         return existing
-    _write_json_atomic(done_path, completion)
+    write_json_atomic(done_path, completion)
     return completion
 
 

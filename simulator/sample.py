@@ -141,7 +141,7 @@ def _reproducible_subset(index: int, fraction: float) -> bool:
 
 def genealogy_summary(
     ts, edges: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pair coalescences and branch length per target time bin.
 
     Pair coalescences, not node counts.  A coalescence rate is a statement
@@ -154,10 +154,16 @@ def genealogy_summary(
     counts sum to C(n, 2) -- 2,016 for sixty-four haplotypes -- which is what
     makes them self-checking.
 
-    From the counts alone the whole trajectory follows: the pairs still
-    uncoalesced entering a bin are the total minus what has already met, so
-    the hazard is ``count / remaining / width`` and Ne is one over twice that.
-    Nothing else needs storing for the rate.
+    From the counts the whole trajectory follows: the pairs still uncoalesced
+    entering a bin are the total minus what has already met, so the hazard is
+    ``count / remaining / width`` and Ne is one over twice that.  That running
+    total is why the pairs which met *outside* the grid are returned as well.
+    Between one and two percent of pairs coalesce more recently than the first
+    bin edge, and leaving them out of the total does not shift the recent bins
+    much but compounds: by the deep bins only a handful of pairs are left, and
+    a two-percent error in what started there is a large error in what remains.
+    Measured against the exact answer it reaches 3.3 in log10 Ne at 256
+    haplotypes, on a label spanning four decades.
 
     Branch length is kept beside it because it answers the other question --
     not how fast lineages met, but how much sequence there was to see it in.
@@ -166,14 +172,22 @@ def genealogy_summary(
     the edge table rather than tree by tree: an edge already carries its span
     and both endpoint times, so the whole calculation is one clipped overlap
     per bin -- 0.19 seconds on a row whose ancestry simulation took 233.
+
+    Both are per unit sequence.  ``pair_coalescence_counts`` normalises by span
+    on its own and the exposure is divided by the same length, so the two are on
+    one footing and their ratio means the same thing at 20 Mb as at 80 Mb.
+    Leaving the exposure as a total instead would make it scale with the
+    sequence while the counts did not, and the ratio would then carry a factor
+    of the length that belongs to neither.
     """
 
     bins = np.asarray(edges, dtype=np.float64)
     windows = np.concatenate(([0.0], bins, [np.inf]))
-    pair_counts = np.asarray(
+    full_counts = np.asarray(
         ts.pair_coalescence_counts(time_windows=windows, span_normalise=True),
         dtype=np.float64,
-    )[1:-1]
+    )
+    pair_counts = full_counts[1:-1]
 
     node_times = ts.tables.nodes.time
     edge_table = ts.tables.edges
@@ -182,6 +196,8 @@ def genealogy_summary(
     span = np.asarray(edge_table.right, dtype=np.float64) - np.asarray(
         edge_table.left, dtype=np.float64
     )
+    outside = np.array([full_counts[0], full_counts[-1]], dtype=np.float64)
+
     exposure = np.empty(bins.size - 1, dtype=np.float64)
     for index in range(bins.size - 1):
         overlap = np.clip(
@@ -190,7 +206,8 @@ def genealogy_summary(
             None,
         )
         exposure[index] = float((overlap * span).sum())
-    return pair_counts, exposure
+    exposure /= float(ts.sequence_length)
+    return pair_counts, exposure, outside
 
 
 def simulate_one(task: tuple) -> dict:
@@ -379,13 +396,20 @@ def simulate_one(task: tuple) -> dict:
         # carries zeros and says so in ``arg_detail``.
         target_edges, _ = time_grid(cfg)
         if write_genealogy and ts is not None:
-            pair_coalescences, exposure = genealogy_summary(ts, target_edges)
+            pair_coalescences, exposure, outside = genealogy_summary(ts, target_edges)
         else:
             pair_coalescences = np.zeros(int(cfg.time_bins), dtype=np.float64)
             exposure = np.zeros(int(cfg.time_bins), dtype=np.float64)
+            outside = np.zeros(2, dtype=np.float64)
         out["pair_coalescences_per_bin"] = pair_coalescences.astype(np.float32)
         out["branch_length_per_bin"] = exposure.astype(np.float32)
+        # [before the first bin edge, after the last].  Float32 is too coarse
+        # for a running total that has to stay exact across sixty-four
+        # subtractions, so these two keep full precision.
+        out["pair_coalescences_outside"] = outside.astype(np.float64)
         meta["pair_coalescences_total"] = float(pair_coalescences.sum())
+        meta["pair_coalescences_before_grid"] = float(outside[0])
+        meta["pair_coalescences_after_grid"] = float(outside[1])
         # A bin holding fewer than ten pair coalescences cannot support a rate:
         # this is the same threshold the SMC literature uses for its own time
         # discretisation.

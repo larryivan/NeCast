@@ -475,3 +475,93 @@ def test_epochs_follow_the_curve_to_the_tolerance_they_promise() -> None:
                 assert float(np.max(np.abs(probe - held))) <= tol, (
                     f"epoch {index} drifts past its {tol} bound"
                 )
+
+
+# --------------------------------------------------------------------------
+# The genealogy summary has to be sufficient for what it claims
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("n_haplotypes", [64, 128, 256])
+def test_the_stored_genealogy_summary_reconstructs_the_coalescence_rate(
+    n_haplotypes: int,
+) -> None:
+    """The counts are stored so a rate can be rebuilt from them; hold them to it.
+
+    Rebuilding needs the pairs still uncoalesced entering each bin, which is the
+    total minus everything that has already met -- including whatever met more
+    recently than the first bin edge.  That is one to two percent of pairs, and
+    leaving it out barely moves the recent bins but compounds into the deep
+    ones, where only a handful of pairs are left: measured at 256 haplotypes it
+    reached 3.3 in log10 Ne before ``pair_coalescences_outside`` existed.
+    """
+
+    import msprime
+
+    from simulator.sample import genealogy_summary
+
+    edges, _ = time_grid(Config())
+    windows = np.concatenate(([0.0], edges, [np.inf]))
+    ts = msprime.sim_ancestry(
+        samples=n_haplotypes // 2,
+        sequence_length=5_000_000,
+        recombination_rate=1.25e-8,
+        population_size=12_000,
+        ploidy=2,
+        random_seed=13,
+    )
+    counts, _, outside = genealogy_summary(ts, edges)
+
+    total = n_haplotypes * (n_haplotypes - 1) // 2
+    assert float(counts.sum() + outside.sum()) == pytest.approx(total, rel=1e-9)
+    assert outside[0] > 0.0, "some pairs always coalesce more recently than 50 generations"
+
+    # Rebuild the rate the way a reader would, and check it against tskit's own.
+    remaining = total - outside[0] - np.concatenate(([0.0], np.cumsum(counts)[:-1]))
+    with np.errstate(all="ignore"):
+        fraction = np.clip(counts / np.maximum(remaining, 1e-12), 0.0, 1.0 - 1e-12)
+        rebuilt = -np.log1p(-fraction) / np.diff(edges)
+    reference = np.asarray(ts.pair_coalescence_rates(time_windows=windows))[1:-1]
+
+    # A bin in which every pair still at risk coalesces has no rate to report:
+    # the survival form divides by what is left over and nothing is.  tskit
+    # answers such a bin with its own convention; exclude it rather than pin
+    # someone else's tail handling.
+    exhausted = counts >= remaining - 1e-9
+    usable = np.isfinite(reference) & (remaining >= 1.0) & ~exhausted
+    assert usable.sum() >= 40, "too few bins to be a real check"
+    np.testing.assert_allclose(rebuilt[usable], reference[usable], rtol=1e-9)
+
+
+def test_the_genealogy_summary_is_per_unit_sequence() -> None:
+    """Both halves of it, so their ratio means one thing at every length.
+
+    ``pair_coalescence_counts`` normalises by span on its own.  If the branch
+    length beside it were left as a total it would scale with the sequence while
+    the counts did not, and anyone forming the natural ratio would carry a
+    factor of the length that belongs to neither -- across a matrix spanning
+    20 to 80 Mb that is a fourfold artefact.
+    """
+
+    import msprime
+
+    from simulator.sample import genealogy_summary
+
+    edges, _ = time_grid(Config())
+    summaries = {}
+    for sequence_length in (5_000_000, 20_000_000, 80_000_000):
+        ts = msprime.sim_ancestry(
+            samples=32,
+            sequence_length=sequence_length,
+            recombination_rate=1.25e-8,
+            population_size=12_000,
+            ploidy=2,
+            random_seed=13,
+        )
+        summaries[sequence_length] = genealogy_summary(ts, edges)
+
+    reference_counts = summaries[5_000_000][0].sum()
+    reference_exposure = summaries[5_000_000][1].sum()
+    for sequence_length, (counts, exposure, _) in summaries.items():
+        assert counts.sum() == pytest.approx(reference_counts, rel=0.01), sequence_length
+        assert exposure.sum() == pytest.approx(reference_exposure, rel=0.05), sequence_length

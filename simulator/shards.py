@@ -325,6 +325,7 @@ _TRUTH_ARRAY_ORDER = (
 _GENEALOGY_ARRAY_ORDER = (
     "pair_coalescences_per_bin",
     "branch_length_per_bin",
+    "pair_coalescences_outside",
 )
 _FRAGMENT_DIRNAME = ".fragments"
 _FRAGMENT_RECEIPT_SCHEMA_VERSION = 1
@@ -427,6 +428,9 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
             branch_length_per_bin=np.stack(
                 [s["branch_length_per_bin"] for s in samples]
             ).astype(np.float32),
+            pair_coalescences_outside=np.stack(
+                [s["pair_coalescences_outside"] for s in samples]
+            ).astype(np.float64),
         )
     return arrays
 
@@ -1323,6 +1327,8 @@ def _metadata_row(meta: dict) -> dict:
         "arg_detail": meta.get("arg_detail", "none"),
         "arg_path": meta.get("arg_path", ""),
         "pair_coalescences_total": meta.get("pair_coalescences_total", 0.0),
+        "pair_coalescences_before_grid": meta.get("pair_coalescences_before_grid", 0.0),
+        "pair_coalescences_after_grid": meta.get("pair_coalescences_after_grid", 0.0),
         "resolvable_bins": meta.get("resolvable_bins", 0),
         "stress_scenario": meta.get("stress_scenario", False),
         "curve_demography": meta.get("curve_demography", False),

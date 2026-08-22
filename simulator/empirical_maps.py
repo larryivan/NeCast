@@ -13,6 +13,32 @@ from .config import MAX_MSPRIME_RATE, Config
 from .utils import loguniform
 
 
+# Gaps in a published map are filled with a constant so the rate map covers the
+# whole chromosome, which msprime requires.  A slice must not be taken from that
+# fill: the rate there was never measured, and the largest of these gaps are the
+# acrocentric short arms and the centromeres, which carry no callable sequence in
+# real data either.  Gaps below this are bridged instead of splitting the run --
+# at a hundred kilobases every autosome still offers a measured span of at least
+# 32 Mb (chr21), and below it chr21 falls to 20 Mb and drops out of any 30 Mb
+# slice, taking with it the highest recombination rate in the genome.
+MEASURED_GAP_TOLERANCE_BP = 100_000.0
+
+
+def _merge_runs(runs: list[tuple[float, float]], tolerance: float) -> np.ndarray:
+    """Join spans separated by less than ``tolerance``.  Returns an (n, 2) array."""
+
+    if not runs:
+        return np.zeros((0, 2), dtype=np.float64)
+    ordered = sorted(runs)
+    merged = [list(ordered[0])]
+    for start, end in ordered[1:]:
+        if start - merged[-1][1] < tolerance:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return np.asarray(merged, dtype=np.float64)
+
+
 @dataclass
 class PiecewiseRateMap:
     chrom: str
@@ -25,6 +51,11 @@ class PiecewiseRateMap:
     mean_rate_after_scaling: float = 0.0
     scaling_method: str = "identity"
     source_format: str = "unknown"
+    # (n, 2) spans the source file actually measured, merged across small gaps.
+    # Empty means the map makes no claim and its whole extent is used.
+    measured_runs: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 2), dtype=np.float64)
+    )
 
     @property
     def length(self) -> float:
@@ -78,7 +109,17 @@ class EmpiricalMapStore:
         return usable
 
     def common_slice_start_bounds(self, chrom: str, length: int) -> tuple[float, float]:
-        """Return the inclusive start-coordinate range usable by both maps."""
+        """Return the inclusive start-coordinate range measured by both maps.
+
+        The bound is the longest span both maps measured, not the span they
+        cover.  A rate map covers its whole chromosome because msprime requires
+        it to, and the difference is filled with a constant that was never
+        observed -- on chr21 that fill is the first 14.1 Mb, the acrocentric
+        short arm, which is in no map and is not callable in real data either.
+        Slicing from it puts a fabricated flat landscape into a fifth of the
+        rows drawn from that chromosome.
+        """
+
         if chrom not in self.rec_maps or chrom not in self.mut_maps:
             raise ValueError(f"Chromosome {chrom!r} is not present in both empirical maps")
         if length <= 0:
@@ -90,19 +131,49 @@ class EmpiricalMapStore:
             mut_map = self.mut_maps[chrom]
             _validate_piecewise_rate_map(rec_map)
             _validate_piecewise_rate_map(mut_map)
-            cached_span = (
-                max(float(rec_map.position[0]), float(mut_map.position[0])),
-                min(float(rec_map.position[-1]), float(mut_map.position[-1])),
-            )
+            cached_span = self._longest_measured_overlap(rec_map, mut_map)
             self._common_span_cache[chrom] = cached_span
         common_left, common_right = cached_span
         latest_start = common_right - float(length)
         if latest_start < common_left:
             raise ValueError(
                 f"Chromosome {chrom!r} has only {common_right - common_left:g} bp "
-                f"shared between empirical maps, shorter than requested slice {length:g} bp"
+                f"measured by both empirical maps, shorter than requested slice {length:g} bp"
             )
         return common_left, latest_start
+
+    @staticmethod
+    def _longest_measured_overlap(
+        rec_map: "PiecewiseRateMap", mut_map: "PiecewiseRateMap"
+    ) -> tuple[float, float]:
+        """The longest span both maps measured, or their shared extent if neither says."""
+
+        def runs(rate_map: "PiecewiseRateMap") -> np.ndarray:
+            declared = np.asarray(rate_map.measured_runs, dtype=np.float64).reshape(-1, 2)
+            if declared.size:
+                return declared
+            return np.asarray(
+                [[float(rate_map.position[0]), float(rate_map.position[-1])]],
+                dtype=np.float64,
+            )
+
+        best = (0.0, 0.0)
+        left_runs, right_runs = runs(rec_map), runs(mut_map)
+        i = j = 0
+        while i < len(left_runs) and j < len(right_runs):
+            start = max(float(left_runs[i][0]), float(right_runs[j][0]))
+            end = min(float(left_runs[i][1]), float(right_runs[j][1]))
+            if end - start > best[1] - best[0]:
+                best = (start, end)
+            if left_runs[i][1] < right_runs[j][1]:
+                i += 1
+            else:
+                j += 1
+        if best[1] <= best[0]:
+            raise ValueError(
+                f"Chromosome {rec_map.chrom!r} has no span measured by both empirical maps"
+            )
+        return best
 
     def is_available(self, min_len: int) -> bool:
         return bool(self.common_chroms(min_len))
@@ -256,6 +327,12 @@ def _piecewise_from_points(
         step = 1_000.0
         boundaries = np.array([max(0.0, pos[0] - step / 2.0), pos[0] + step / 2.0], dtype=np.float64)
     rates, scaling = _scale_rates(rate_points, baseline_rate, map_kind, input_unit, scale_to_baseline)
+    # A point map measures at its centres; a wide space between two of them is
+    # interpolation, not measurement, so it splits the measured run exactly as a
+    # filled interval gap does.
+    measured = [
+        (float(boundaries[i]), float(boundaries[i + 1])) for i in range(len(rates))
+    ]
     return PiecewiseRateMap(
         chrom=chrom,
         position=boundaries.astype(np.float64),
@@ -263,6 +340,7 @@ def _piecewise_from_points(
         rate_unit=scaling["rate_unit_after"],
         **scaling,
         source_format="point_centers",
+        measured_runs=_merge_runs(measured, MEASURED_GAP_TOLERANCE_BP),
     )
 
 
@@ -308,6 +386,7 @@ def _piecewise_from_intervals(
     filler = baseline_rate if baseline_rate is not None else float(np.nanmedian(rates))
     positions = [0.0]
     out_rates: list[float] = []
+    measured: list[tuple[float, float]] = []
     current = 0.0
     for start, end, rate in zip(starts, ends, rates):
         start = float(start)
@@ -321,6 +400,7 @@ def _piecewise_from_intervals(
         if end > current:
             out_rates.append(float(rate))
             positions.append(end)
+            measured.append((start if start > current else current, end))
             current = end
 
     positions_arr = np.asarray(positions, dtype=np.float64)
@@ -336,6 +416,7 @@ def _piecewise_from_intervals(
         rate_unit=scaling["rate_unit_after"],
         **scaling,
         source_format="bed_intervals",
+        measured_runs=_merge_runs(measured, MEASURED_GAP_TOLERANCE_BP),
     )
 
 

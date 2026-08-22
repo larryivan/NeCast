@@ -146,3 +146,109 @@ def test_common_span_validation_is_cached_off_the_sample_hot_path(
     sample_maps_for_source(np.random.default_rng(3), cfg, "empirical_map_slice", store)
     sample_maps_for_source(np.random.default_rng(4), cfg, "empirical_map_slice", store)
     assert calls == 2
+
+
+# --------------------------------------------------------------------------
+# A slice must come from measured map, not from the fill that covers the gaps
+# --------------------------------------------------------------------------
+
+
+def test_a_filled_gap_is_not_offered_as_a_slice() -> None:
+    """A rate map covers its whole chromosome; it did not measure all of it.
+
+    msprime needs a rate for every base, so a published map is padded to zero
+    and its interior gaps are filled with a constant.  On chr21 that fill is the
+    first 14.1 Mb -- the acrocentric short arm, absent from every map and not
+    callable in real data either.  Offering it as a slice start puts a
+    fabricated flat landscape into the training set and calls it human.
+    """
+
+    store = EmpiricalMapStore(
+        rec_maps={
+            "chr1": PiecewiseRateMap(
+                chrom="chr1",
+                position=np.asarray([0.0, 500.0, 900.0], dtype=np.float64),
+                rate=np.asarray([1e-8, 2e-8], dtype=np.float64),
+                measured_runs=np.asarray([[500.0, 900.0]]),
+            )
+        },
+        mut_maps={
+            "chr1": PiecewiseRateMap(
+                chrom="chr1",
+                position=np.asarray([0.0, 400.0, 1000.0], dtype=np.float64),
+                rate=np.asarray([1e-8, 2e-8], dtype=np.float64),
+                measured_runs=np.asarray([[400.0, 1000.0]]),
+            )
+        },
+    )
+
+    # Both maps run from 0, but only [500, 900) was measured by both.
+    assert store.common_slice_start_bounds("chr1", 400) == (500.0, 500.0)
+    assert store.common_chroms(400) == ["chr1"]
+    assert store.common_chroms(401) == []
+
+
+def test_a_map_without_measured_runs_keeps_the_old_behaviour() -> None:
+    """Maps built before the field existed declare nothing; use their extent."""
+
+    store = EmpiricalMapStore(
+        rec_maps={"chr1": _rate_map("chr1", [100, 250, 400], [1e-8, 2e-8])},
+        mut_maps={"chr1": _rate_map("chr1", [120, 300, 500], [3e-8, 4e-8])},
+    )
+    assert store.common_slice_start_bounds("chr1", 280) == (120.0, 120.0)
+
+
+def test_the_longest_measured_overlap_is_chosen_not_the_first() -> None:
+    """Two maps with several measured runs share more than one window."""
+
+    store = EmpiricalMapStore(
+        rec_maps={
+            "chr1": PiecewiseRateMap(
+                chrom="chr1",
+                position=np.asarray([0.0, 100.0, 200.0, 1000.0, 5000.0], dtype=np.float64),
+                rate=np.asarray([1e-8, 2e-8, 1e-8, 2e-8], dtype=np.float64),
+                measured_runs=np.asarray([[100.0, 200.0], [1000.0, 5000.0]]),
+            )
+        },
+        mut_maps={
+            "chr1": PiecewiseRateMap(
+                chrom="chr1",
+                position=np.asarray([0.0, 100.0, 200.0, 1200.0, 4000.0], dtype=np.float64),
+                rate=np.asarray([1e-8, 2e-8, 1e-8, 2e-8], dtype=np.float64),
+                measured_runs=np.asarray([[100.0, 200.0], [1200.0, 4000.0]]),
+            )
+        },
+    )
+    # The short window at [100, 200) overlaps too; the long one has to win.
+    assert store.common_slice_start_bounds("chr1", 100) == (1200.0, 3900.0)
+
+
+@pytest.mark.skipif(
+    not Config().recomb_map or not Config().mut_map, reason="no empirical maps configured"
+)
+def test_every_autosome_can_supply_the_production_slice_from_measured_map() -> None:
+    """Thirty megabases is the number, and this is why it is that number.
+
+    Above it chr19 goes first -- the two maps measure only 30.8 Mb in common
+    there -- and the small chromosomes carry 1.7x the recombination rate of the
+    large ones, so losing them tilts the recombination landscape the training
+    set sees away from the one the model will be applied to.
+    """
+
+    from simulator.config import apply_preset
+    from simulator.empirical_maps import load_empirical_maps
+
+    cfg = apply_preset(Config(preset="full_v01"))
+    store = load_empirical_maps(cfg)
+    assert cfg.seq_len == 30_000_000
+
+    usable = store.common_chroms(cfg.seq_len)
+    assert len(usable) == 22, f"only {len(usable)} autosomes can supply {cfg.seq_len} bp"
+
+    for chrom in usable:
+        left, right = store.common_slice_start_bounds(chrom, cfg.seq_len)
+        runs = np.asarray(store.rec_maps[chrom].measured_runs).reshape(-1, 2)
+        assert runs.size, chrom
+        assert any(
+            start <= left and right + cfg.seq_len <= end for start, end in runs
+        ), f"{chrom} offers a start outside every measured run"

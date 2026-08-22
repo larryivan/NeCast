@@ -428,8 +428,23 @@ def apply_preset(cfg: Config) -> Config:
         cfg.dataset_name = "DLCoalSim-Full-v0.1"
         cfg.n_samples = 100_000
         cfg.shard_size = 128
-        cfg.seq_len = 20_000_000
-        cfg.n_haplotypes = 64
+        # Thirty megabases because that is what every human autosome can supply
+        # from measured map: the shortest measured span of the two empirical
+        # maps together is chr21's 32.0 Mb, and a slice longer than that either
+        # drops the small chromosomes -- which carry 1.7x the recombination rate
+        # of the large ones, so losing them biases the training landscape -- or
+        # is filled with a fabricated flat rate.  Reference length is the wrong
+        # yardstick: chr21 measures 46.7 Mb but its acrocentric short arm is not
+        # in any map and is not callable in real data either.
+        cfg.seq_len = 30_000_000
+        # A hundred and twenty-eight because the information gain is measured
+        # and the alternative is not a superset.  On 128 paired histories at
+        # 20 Mb the oracle improves 0.1482 -> 0.1276 from 64 to 128 haplotypes,
+        # 4.2 standard errors, concentrated in the recent bins where the label
+        # is hardest.  256 buys a further 0.0133 for 1.9x the disk and would
+        # collide with the width ladder for VRAM.  Data at 128 can be trained
+        # at 64 by dropping individuals; the reverse is not possible.
+        cfg.n_haplotypes = 128
         cfg.time_bins = 64
         cfg.workers = -1
         cfg.p_clean_constant = 0.10

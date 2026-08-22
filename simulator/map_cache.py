@@ -23,7 +23,11 @@ import pandas as pd
 CACHE_SCHEMA = "dlcoalsim.empirical-map-cache.v1"
 CACHE_ENV_VAR = "DLCOALSIM_CACHE_DIR"
 MANIFEST_NAME = "manifest.json"
-ARRAY_FIELDS = ("position", "rate")
+# ``measured_runs`` is a (n, 2) array of the spans a source file actually
+# measured.  It rides with the rate arrays rather than the scalars because it is
+# per-chromosome and variable length, and a cache that dropped it would hand back
+# a map that claims its filled gaps were observed.
+ARRAY_FIELDS = ("position", "rate", "measured_runs")
 SCALAR_FIELDS = (
     "chrom",
     "rate_unit",

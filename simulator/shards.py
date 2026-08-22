@@ -352,7 +352,15 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
     geno_list = [s["geno_packed"].reshape(-1, packed_bytes) for s in samples]
     geno_n = sum(x.shape[0] for x in geno_list)
     geno = np.concatenate(geno_list, axis=0).astype(np.uint8) if geno_n else np.zeros((0, packed_bytes), dtype=np.uint8)
-    missing_flat_idx, missing_offsets = concat_with_offsets([s["missing_flat_idx"] for s in samples], dtype=np.uint32)
+    # One shard, one width: a row that needs sixty-four bits widens the array
+    # it shares, and the declaration below says which width the reader gets.
+    missing_parts = [s["missing_flat_idx"] for s in samples]
+    missing_dtype = (
+        np.uint64
+        if any(part.dtype == np.uint64 for part in missing_parts)
+        else np.uint32
+    )
+    missing_flat_idx, missing_offsets = concat_with_offsets(missing_parts, dtype=missing_dtype)
 
     # Positions float64, rates float32; see the note in ``sample.py``.
     obs_rec_pos, obs_rec_offsets = concat_with_offsets([s["obs_rec_pos"] for s in samples], dtype=np.float64)
@@ -371,7 +379,7 @@ def _shard_arrays(samples: list[dict], cfg: Config) -> dict[str, np.ndarray]:
         genotype_packed=geno,
         missing_flat_idx=missing_flat_idx,
         missing_offsets=missing_offsets,
-        missing_storage=np.array(["sparse_flat_index_uint32"], dtype="U32"),
+        missing_storage=np.array([f"sparse_flat_index_{np.dtype(missing_dtype).name}"], dtype="U32"),
         generator_schema_version=np.array(
             [SAMPLE_GENERATOR_SCHEMA_VERSION],
             dtype=np.int16,
@@ -1107,6 +1115,43 @@ def _stream_gzip_members(
                     line_count += chunk.count(b"\n")
                     target.write(chunk)
     return line_count
+
+
+def _merge_fragment_cost(results: list[dict]) -> dict:
+    """Roll the per-fragment timings up to the shard that replaces them.
+
+    Wall time adds, the mean is re-weighted by row count, and the slowest row
+    keeps the description of what made it slow -- which is the part worth having
+    when a run turns out to cost more than it was budgeted.
+    """
+
+    total_sec = 0.0
+    weighted = 0.0
+    rows = 0
+    slowest = 0.0
+    slowest_result: dict = {}
+    for result in results:
+        n = int(result.get("n_samples", 0))
+        total_sec += float(result.get("shard_sec", 0.0))
+        weighted += float(result.get("mean_sample_sec", 0.0)) * n
+        rows += n
+        if float(result.get("max_sample_sec", 0.0)) > slowest:
+            slowest = float(result["max_sample_sec"])
+            slowest_result = result
+    cost: dict = {
+        "shard_sec": float(total_sec),
+        "mean_sample_sec": float(weighted / rows) if rows else 0.0,
+        "max_sample_sec": float(slowest),
+    }
+    for key in (
+        "slowest_demography_type",
+        "slowest_source_type",
+        "slowest_n_variants",
+        "slowest_max_Ne",
+    ):
+        if key in slowest_result:
+            cost[key] = slowest_result[key]
+    return cost
 
 
 def _merge_fragment_group(
@@ -2547,6 +2592,7 @@ def _final_shard_receipt(
     cfg: Config,
     plan_sha256: str,
     counts: Mapping[str, Mapping[str, int]],
+    cost: Mapping[str, float | int | str] | None = None,
 ) -> dict:
     shard_idx, start, count = final_task
     samples_dir = Path(cfg.out_dir) / "samples"
@@ -2562,6 +2608,7 @@ def _final_shard_receipt(
             key: {str(name): int(value) for name, value in values.items()}
             for key, values in counts.items()
         },
+        **(dict(cost) if cost else {}),
     }
     receipt = {
         "schema_version": _FINAL_SHARD_RECEIPT_SCHEMA_VERSION,
@@ -2673,11 +2720,16 @@ def _merge_committed_shard(
         for result in fragment_results:
             for key in counts:
                 _merge_counts(counts[key], result.get(key, {}))
+        # What each row cost is measured per fragment and was being dropped
+        # here.  It is the only durable record of generation cost, and a run
+        # whose purpose is to measure cost has nowhere else to read it from.
+        cost = _merge_fragment_cost(fragment_results)
         receipt = _final_shard_receipt(
             final_task,
             cfg,
             plan_sha256,
             counts,
+            cost,
         )
         write_json_atomic(_final_receipt_path(samples_dir, shard_idx), receipt)
         committed = _load_committed_final_result(

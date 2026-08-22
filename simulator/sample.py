@@ -295,7 +295,7 @@ def simulate_one(task: tuple) -> dict:
         "genotype_error": float(noise.get("genotype_error", 0.0)),
         "missing_rate": float(noise.get("missing_rate", 0.0)),
         "n_missing_genotypes": int(len(missing_flat_idx)),
-        "missing_storage": "sparse_flat_index_uint32",
+        "missing_storage": f"sparse_flat_index_{missing_flat_idx.dtype.name}",
         "phase_switch_pair_count": int(noise.get("phase_switch_pair_count", 0)),
         "phaseable_pair_count": int(noise.get("phaseable_pair_count", 0)),
         "num_trees": int(ts.num_trees),

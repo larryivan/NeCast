@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 
+import numpy as np
 import pytest
 
 from simulator.config import (
@@ -14,6 +15,7 @@ from simulator.config import (
     apply_preset,
     validate_config,
 )
+from simulator.noise import flat_index_dtype
 
 
 def valid_config() -> Config:
@@ -128,14 +130,35 @@ def test_sequence_positions_must_fit_uint32_storage() -> None:
         validate_config(dataclasses.replace(valid_config(), seq_len=UINT32_MAX + 1))
 
 
-def test_dense_flat_genotype_indices_must_fit_uint32_storage() -> None:
-    cfg = dataclasses.replace(
-        valid_config(),
-        seq_len=UINT32_MAX // 2 + 1,
-        n_haplotypes=2,
+@pytest.mark.parametrize(
+    ("seq_len", "n_haplotypes"),
+    [(60_000_000, 64), (80_000_000, 128), (80_000_000, 256), (40_000_000, 256)],
+)
+def test_a_long_sequence_with_many_haplotypes_is_accepted(
+    seq_len: int, n_haplotypes: int
+) -> None:
+    """The sparse missing index addresses variants, not bases.
+
+    Every configuration here was rejected by a precondition that multiplied
+    ``seq_len`` by ``n_haplotypes``, which is the size of the matrix only if
+    every base is segregating.  Variants are three orders of magnitude rarer,
+    and the width that is actually used is chosen per row from the matrix that
+    was built.
+    """
+
+    validate_config(
+        dataclasses.replace(
+            valid_config(), seq_len=seq_len, n_haplotypes=n_haplotypes
+        )
     )
-    with pytest.raises(ValueError, match="sparse flat genotype"):
-        validate_config(cfg)
+
+
+def test_the_flat_index_width_follows_the_matrix_it_addresses() -> None:
+    limit = np.iinfo(np.uint32).max
+    assert flat_index_dtype(0) == np.uint32
+    assert flat_index_dtype(limit) == np.uint32
+    assert flat_index_dtype(limit + 1) == np.uint64
+    assert flat_index_dtype(10 * limit) == np.uint64
 
 
 def test_stdpopsim_contig_positions_must_fit_uint32_storage() -> None:
@@ -144,14 +167,14 @@ def test_stdpopsim_contig_positions_must_fit_uint32_storage() -> None:
         validate_config(cfg)
 
 
-def test_stdpopsim_flat_indices_must_fit_uint32_storage() -> None:
-    cfg = dataclasses.replace(
-        valid_config(),
-        n_haplotypes=2,
-        stdpopsim_contig_length=UINT32_MAX // 2 + 1,
+def test_a_long_stdpopsim_contig_is_accepted() -> None:
+    validate_config(
+        dataclasses.replace(
+            valid_config(),
+            n_haplotypes=256,
+            stdpopsim_contig_length=UINT32_MAX // 2 + 1,
+        )
     )
-    with pytest.raises(ValueError, match="sparse flat genotype"):
-        validate_config(cfg)
 
 
 def test_probability_fields_are_weights_and_need_not_sum_to_one() -> None:

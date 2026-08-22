@@ -103,17 +103,29 @@ def apply_phase_switch_errors(
     return X, stats
 
 
+def flat_index_dtype(n_cells: int) -> np.dtype:
+    """The narrowest unsigned type that can address ``n_cells`` genotype calls.
+
+    A row's missing calls are stored as flat offsets into its (variants,
+    haplotypes) matrix.  That product is small for a short sequence and a small
+    sample and passes four billion for a long one with many haplotypes, so the
+    width is a property of the row rather than of the format.  Which width was
+    used travels with the data in ``missing_storage``.
+    """
+
+    return np.dtype(np.uint32 if n_cells <= np.iinfo(np.uint32).max else np.uint64)
+
+
 def _sample_flat_indices(rng: np.random.Generator, n: int, p: float) -> np.ndarray:
+    dtype = flat_index_dtype(max(int(n), 0))
     if n <= 0 or p <= 0:
-        return np.zeros(0, dtype=np.uint32)
-    if n > np.iinfo(np.uint32).max:
-        raise ValueError("flat genotype index exceeds uint32 range")
+        return np.zeros(0, dtype=dtype)
     k = int(rng.binomial(int(n), float(np.clip(p, 0.0, 1.0))))
     if k == 0:
-        return np.zeros(0, dtype=np.uint32)
+        return np.zeros(0, dtype=dtype)
     idx = rng.choice(int(n), size=k, replace=False)
     idx.sort()
-    return idx.astype(np.uint32)
+    return idx.astype(dtype, copy=False)
 
 
 def add_false_variants(
@@ -174,7 +186,7 @@ def apply_genotype_noise(
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     if G.size == 0:
         stats = {"phase_switch_count": 0, "phase_switch_pair_count": 0, "phaseable_pair_count": 0}
-        return G.astype(np.uint8), np.zeros(0, dtype=np.uint32), stats
+        return G.astype(np.uint8), np.zeros(0, dtype=flat_index_dtype(G.size)), stats
 
     ge = float(noise.get("genotype_error", 0.0))
     mr = float(noise.get("missing_rate", 0.0))

@@ -253,7 +253,7 @@ class DLCoalSimShard:
         else:
             G = packed
             M = {
-                "storage": "sparse_flat_index_uint32",
+                "storage": str(self.data["missing_storage"][0]),
                 "flat_idx": missing_flat_idx,
             }
         seq = self.data["sequence_length"]

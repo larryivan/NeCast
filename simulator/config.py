@@ -605,10 +605,12 @@ def validate_config(cfg: Config) -> None:
 
     if seq_len > UINT32_MAX:
         raise ValueError(f"seq_len must not exceed the uint32 position limit ({UINT32_MAX})")
-    if seq_len * n_haplotypes > UINT32_MAX:
-        raise ValueError(
-            "seq_len * n_haplotypes must fit in uint32 so sparse flat genotype indices remain representable"
-        )
+    # There is no bound on ``seq_len * n_haplotypes`` here.  The sparse missing
+    # index addresses the (variants, haplotypes) matrix, not the (bases,
+    # haplotypes) one, and variants are three orders of magnitude rarer than
+    # bases -- the old check rejected 60 Mb at 64 haplotypes, which stores an
+    # index reaching about one billion.  The width is chosen per row from the
+    # matrix actually built and declared in ``missing_storage``.
 
     resolution = finite("demography_resolution_log10")
     if resolution <= 0.0:
@@ -700,10 +702,6 @@ def validate_config(cfg: Config) -> None:
         raise ValueError("stdpopsim_contig_length must be 0 or greater")
     if stdpopsim_contig_length > UINT32_MAX:
         raise ValueError(f"stdpopsim_contig_length must not exceed the uint32 position limit ({UINT32_MAX})")
-    if stdpopsim_contig_length and stdpopsim_contig_length * n_haplotypes > UINT32_MAX:
-        raise ValueError(
-            "stdpopsim_contig_length * n_haplotypes must fit in uint32 for sparse flat genotype indices"
-        )
 
     if cfg.recomb_map_unit not in {"per_bp", "cM_per_Mb"}:
         raise ValueError("recomb_map_unit must be 'per_bp' or 'cM_per_Mb'")

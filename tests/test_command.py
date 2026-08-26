@@ -71,6 +71,18 @@ def test_a_window_without_sites_is_left_out(tmp_path):
     assert "no sites in the VCF; left out" in (tmp_path / "out" / "log.txt").read_text()
 
 
+@needs_tabix
+def test_a_group_without_variable_sites_is_left_out(tmp_path):
+    # every call './.', as bcftools merge writes for samples from a batch without this chromosome
+    def no_calls(line):
+        fields = line.split("\t")
+        return "\t".join(fields[:9] + ["./."] * (len(fields) - 9))
+    vcf = example_vcf(tmp_path, lambda lines: [line if line.startswith("#") else no_calls(line) for line in lines])
+    with pytest.raises(cli.InputError, match="no window"):
+        cli.run(vcf, MASK, tmp_path / "out", mu=1e-8, rec_rate=1e-8)
+    assert "no site varies among the individuals; left out" in (tmp_path / "out" / "log.txt").read_text()
+
+
 def test_errors_are_reported_without_a_traceback():
     with pytest.raises(SystemExit, match="^necast: give the mutation rate"):
         cli.main(["run", str(VCF), "--mask", str(MASK), "--out", "unused", "--rec-rate", "1e-8"])

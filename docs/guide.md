@@ -71,8 +71,10 @@ sequence. A window may span masked stretches of up to 1 Mb; a longer one ends
 the current run of sequence. Each run is cut from left to right, and a
 remainder shorter than 30 Mb is left out. Inside a window the accessible
 pieces are joined end to end. A chromosome with less than 30 Mb of accessible
-sequence in one run gives no window, and a window with no site in the VCF (on
-a chromosome the VCF does not hold, for example) is left out; the log says so.
+sequence in one run gives no window. A window with no site in the VCF (on a
+chromosome the VCF does not hold, for example) is left out, and so is a group
+of 32 whose individuals vary at no site in a window, as when all their calls
+there are missing; the log says so.
 
 Chromosome names may carry `chr` or not: `chr1` and `1` are the same
 chromosome in every file.

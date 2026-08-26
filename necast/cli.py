@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from necast import __version__, maps, network, report, window
+from necast import __version__, maps, network, report, summaries, window
 from necast.window import InputError
 
 EXAMPLE = Path(__file__).parent / "example"
@@ -154,14 +154,19 @@ def run(vcf, mask, out, human=False, mu=None, rec_rate=None, rec_map=None, mut_m
             check_map(rec_w, log)
             for g in range(len(groups)):
                 w = window.Window(positions, np.ascontiguousarray(states[:, 32 * g: 32 * g + 32]), rec_w, mut_w)
-                check_calls(w.states, f" of group {g + 1}" if len(groups) > 1 else "", log)
+                label = f" of group {g + 1}" if len(groups) > 1 else ""
+                check_calls(w.states, label, log)
+                if not summaries.segregating(w.states).any():   # e.g. samples with no calls on this chromosome
+                    log(f"  no site varies among the individuals{label}; left out")
+                    continue
                 results.append((chromosome, int(intervals[0, 0]), int(intervals[-1, 1]), g + 1,
                                 net.estimate(w, threads)))
     if not results:
         raise InputError("found no window: a window needs 30 Mb of accessible sequence on one chromosome, "
-                         "with no masked stretch longer than 1 Mb, and sites in the VCF. Check the mask.")
+                         "with no masked stretch longer than 1 Mb, and variable sites in the VCF. Check the mask.")
     mean = report.write(out, results, generation_time, truth)
-    log(f"done in {time.perf_counter() - started:.0f} s: {plural(len(results) // len(groups), 'window')}; "
+    windows_read = {r[:3] for r in results}               # (chromosome, start, end)
+    log(f"done in {time.perf_counter() - started:.0f} s: {plural(len(windows_read), 'window')}; "
         f"results in {out}: necast.tsv, windows.tsv, necast.png")
     return mean
 

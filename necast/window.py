@@ -10,8 +10,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-warnings.filterwarnings("ignore", "no intervals found")   # cyvcf2, for a region without records; necast logs it
-
 WINDOW_BP = 30_000_000
 MAX_GAP_BP = 1_000_000       # a window never spans a masked stretch longer than this
 INDIVIDUALS = 32             # the network reads 32 individuals at a time
@@ -112,13 +110,15 @@ def read_genotypes(vcf, chromosome, intervals, columns):
     they cannot be told apart. REF is taken as the ancestral allele."""
     positions, rows = [], []
     region = f"{chromosome}:{intervals[0, 0] + 1}-{intervals[-1, 1]}"
-    for record in vcf(region):
-        if record.FILTER is None and len(record.ALT) == 1 and record.REF in BASES and record.ALT[0] in BASES:
-            positions.append(record.POS - 1)
-            gt = record.genotype.array()[columns]          # the alleles, then the phase
-            if gt.shape[1] == 2:                           # every call haploid: mark them as cyvcf2 does
-                gt = np.insert(gt, 1, -2, axis=1)
-            rows.append(gt[:, :2])
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "no intervals found")   # cyvcf2, for a region without records; necast logs it
+        for record in vcf(region):
+            if record.FILTER is None and len(record.ALT) == 1 and record.REF in BASES and record.ALT[0] in BASES:
+                positions.append(record.POS - 1)
+                gt = record.genotype.array()[columns]          # the alleles, then the phase
+                if gt.shape[1] == 2:                           # every call haploid: mark them as cyvcf2 does
+                    gt = np.insert(gt, 1, -2, axis=1)
+                rows.append(gt[:, :2])
     if not positions:
         return np.zeros(0, np.int64), np.zeros((0, len(columns)), np.uint8)
     physical = np.array(positions, dtype=np.int64)

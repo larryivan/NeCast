@@ -1,10 +1,10 @@
 """Loader for the frozen stdpopsim single-population trajectories.
 
-These eighteen models, across eight species, are the held-out evaluation set.
-They exist so that generalisation can be measured against histories that were
-published by other people for other reasons, rather than against our own prior
-re-drawn -- which measures nothing.  phlash validates the same way, on twelve
-stdpopsim models across eight species.
+These eighteen models, across eight species, are histories published by other
+people for other reasons, and one part of the training mixture: necast train
+fits them like the other rows.  A network trained without them
+(``--p-stdpopsim-single-pop 0``) can be tested on them, as phlash is validated
+on twelve stdpopsim models across eight species.
 
 The trajectories are frozen into ``necast/third_party/histories/stdpopsim_single_pop``
 by ``necast/third_party/histories/build_stdpopsim_single_pop.py`` rather than
@@ -55,12 +55,11 @@ def _fit_to_bounds(values: tuple[float, ...]) -> float:
 
     Two of the eighteen models -- *Anopheles gambiae* and the Indian
     *M. m. castaneus* -- carry effective sizes above a million, and one Holstein
-    model dips below a hundred.  Clipping them would flatten exactly the
-    features they are held out to test, so the whole trajectory is multiplied by
-    one constant instead: Ne is only identifiable jointly with the mutation
-    rate, and a uniform factor leaves the shape -- which is what generalisation
-    is being measured on -- bit-for-bit intact.  The factor is recorded so the
-    published model can always be recovered.
+    model dips below a hundred.  Clipping them would flatten their features, so
+    the whole trajectory is multiplied by one constant instead: Ne is only
+    identifiable jointly with the mutation rate, and a uniform factor leaves
+    the shape bit-for-bit intact.  The factor is recorded so the published
+    model can always be recovered.
     """
 
     low, high = 10.0 ** NE_LOG10_BOUNDS[0], 10.0 ** NE_LOG10_BOUNDS[1]

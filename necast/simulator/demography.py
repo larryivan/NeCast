@@ -1540,22 +1540,23 @@ def _ooa_chain(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: n
 
 
 # ---------------------------------------------------------------------------
-# The held-out evaluation catalogue
+# The stdpopsim catalogue
 # ---------------------------------------------------------------------------
 
 
 def _stdpopsim_single_pop(rng: np.random.Generator, cfg: Config, edges: np.ndarray, mids: np.ndarray) -> SamplerResult:
-    """One of the eighteen frozen stdpopsim single-population models, verbatim.
+    """One of the eighteen frozen stdpopsim single-population models.
 
-    No randomisation of the trajectory at all: the map, the mutation rate and
-    the sequencing noise still differ from row to row, so a run of these is a
-    set of data replicates of a fixed known history.  That is what makes them
-    usable as evidence -- the shape was chosen by other people for other
-    reasons, so error on it is not error on our own prior redrawn.
+    The trajectory is not randomised (three of the models are multiplied by
+    one constant to fit the Ne band): the map, the mutation rate and the
+    sequencing noise still differ from row to row, so a run of these is a set
+    of data replicates of a fixed known history, whose shape was chosen by
+    other people for other reasons.
 
-    These rows carry ``held_out_evaluation`` so the split can route them out of
-    the training gradient.  Training on them would not be wrong so much as
-    pointless: it would destroy the only measurement they exist to provide.
+    These rows carry ``held_out_evaluation``, which a split could use to keep
+    them out of the training gradient.  necast train does not read it and fits
+    them like any other row; to test on these histories, train with
+    ``--p-stdpopsim-single-pop 0``.
     """
 
     template = choose_stdpopsim_template(rng, cfg)

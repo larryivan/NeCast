@@ -1305,9 +1305,9 @@ def _metadata_row(meta: dict) -> dict:
         # path from a sampler to the disk, and every field a recipe draws has
         # to be on it or the claim that grouping can be done at analysis time
         # on realised parameters -- which is what replaced 27 recipe names --
-        # is false.  ``held_out_evaluation`` is the one that mattered most: it
-        # is how a split keeps the stdpopsim catalogue out of the training
-        # gradient, and without it here that flag existed only in memory.
+        # is false.  ``held_out_evaluation`` is one: a split could use it to
+        # keep the stdpopsim catalogue out of the training gradient (necast
+        # train does not), and without it here that flag existed only in memory.
         "held_out_evaluation": meta.get("held_out_evaluation", False),
         "arg_detail": meta.get("arg_detail", "none"),
         "arg_path": meta.get("arg_path", ""),

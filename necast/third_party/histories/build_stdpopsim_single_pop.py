@@ -1,10 +1,8 @@
 """Freeze the stdpopsim single-population trajectories into a data file.
 
-Why a data file rather than a runtime import.  These eighteen models are the
-held-out evaluation set: the point of them is that the model has never seen
-their shape during training, so what matters is that the exact same eighteen
-trajectories are available to every run, on every machine, for the life of the
-project.  A runtime ``import stdpopsim`` makes that depend on which version
+Why a data file rather than a runtime import.  What matters is that the exact
+same eighteen trajectories are available to every run, on every machine, for
+the life of the project.  A runtime ``import stdpopsim`` makes that depend on which version
 happens to be installed -- the catalogue is versioned and its parameters do get
 corrected -- and makes the generator fail wherever the package is missing.  The
 human Ne templates under ``necast/third_party/histories/human_ne`` are frozen for the same

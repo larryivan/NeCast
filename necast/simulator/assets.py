@@ -4,8 +4,8 @@ Three modules resolved paths independently before this one existed, with two
 near-identical private helpers and one module -- the stdpopsim catalogue --
 that had neither.  That third one failed silently: run from any directory other
 than the repository root it found no templates at all and reported an empty
-catalogue rather than an error, so the eighteen held-out cross-species models
-simply were not there.
+catalogue rather than an error, so the eighteen cross-species models simply
+were not there.
 
 Everything the simulator needs to run ships inside the package, in
 ``necast/third_party``.  A relative path is looked up in the working directory

@@ -225,7 +225,8 @@ class Config:
     # weight are different things: the last three entries are histories other
     # people published, and rows drawn from them carry
     # ``held_out_evaluation`` or ``literature_demography_anchor`` so a split
-    # can keep them out of the training gradient.
+    # can keep them out of the training gradient.  necast train reads neither
+    # and fits these rows like the others.
     # Weights were set against a measured quantity rather than a feeling: for
     # each recipe, the share of its rows whose label standard deviation is
     # under 0.24 -- the level every architecture arm sits at, so on those rows
@@ -271,10 +272,9 @@ class Config:
     p_event_on_background: float = 0.086
     p_ooa_chain: float = 0.08
     p_empirical_human_ne_template: float = 0.19
-    # Eighteen single-population models across eight species, verbatim.  Error
-    # measured on these is evidence about generalisation in a way that error on
-    # our own prior redrawn can never be, and because each model draws one
-    # fixed trajectory, a run of them is a set of data replicates of a known
+    # Eighteen single-population models across eight species, three of them
+    # multiplied by one constant to fit the Ne band.  Each model draws one
+    # fixed trajectory, so a run of them is a set of data replicates of a known
     # history -- which is what makes bias and variance on it readable straight
     # out of the dataset.  phlash's simulation study is built the same way,
     # three replicates per scenario.

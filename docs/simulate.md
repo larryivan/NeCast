@@ -113,7 +113,9 @@ history can appear with any map.
 | `stdpopsim_single_pop` | 0.024 | the 18 published single-population histories of the stdpopsim catalogue, across 8 species; three are multiplied by one constant to keep their sizes within 100 to 1,000,000 |
 
 Sizes range from 100 to 1,000,000. The kind of each window is in the
-`generator_recipe` column of `metadata/samples.csv`.
+`generator_recipe` column of `metadata/samples.csv`. The
+`held_out_evaluation` column marks the stdpopsim histories, but `necast train`
+does not read it and fits them like the other kinds.
 
 ### Maps
 

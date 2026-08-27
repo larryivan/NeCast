@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "cyvcf2>=0.31",
+    "cyvcf2>=0.31.1",
     "matplotlib>=3.9",
     "numba>=0.60",
     "numpy>=2",

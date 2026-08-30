@@ -69,7 +69,8 @@ Times are in generations, except the SMC++ curves, which are in years and are
 divided by 29 when read. `histories/human_ne/README.md` gives the files and
 how each was converted.
 
-Terms: the SMC++ curves are under the MIT licence of pyrho; the phlash_paper
+Terms: the SMC++ curves are under the MIT licence of pyrho
+(`histories/human_ne/LICENSE-pyrho.txt`); the phlash_paper
 and MSMC-IM repositories state no licence, and the MSMC2 and MSMC-IM curves
 are included with Ke Wang's permission.
 
@@ -92,7 +93,8 @@ Indian *M. m. castaneus* by 0.197 and one Holstein model by 1.111. The file
 holds the published sizes; each window records its factor as
 `stdpopsim_ne_rescale`.
 
-Terms: GPL-3.0, the licence of stdpopsim.
+Terms: GPL-3.0-or-later, the licence of stdpopsim; the text is in
+`histories/stdpopsim_single_pop/LICENSE-stdpopsim.txt`.
 
 ## GRCh38 gaps: `reference/grch38_gaps.bed`
 

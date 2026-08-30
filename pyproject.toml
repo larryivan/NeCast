@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Population size history from unphased genotypes and genetic maps"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
-license-files = ["LICENSE", "necast/third_party/psmcplus/LICENSE.txt"]
+license = "MIT AND GPL-3.0-or-later"     # the stdpopsim histories are under stdpopsim's GPL
+license-files = ["LICENSE", "necast/third_party/**/LICENSE*.txt"]
 authors = [{ name = "Yufan Han" }]
 keywords = ["population genetics", "effective population size", "demographic inference", "coalescent"]
 classifiers = [
@@ -49,13 +49,14 @@ include = ["necast*"]
 "necast.third_party.reference" = ["*.bed"]
 "necast.third_party.histories.human_ne" = [
     "README.md",
+    "LICENSE-pyrho.txt",
     "smcpp_popsizes_1kg.csv",
     "phlash_unified_populations_normalized.csv",
     "phlash_superpopulations_normalized.csv",
     "msmc2_yoruba_french_within_ne_normalized.csv",
     "msmc_im_yoruba_french_ne_normalized.csv",
 ]
-"necast.third_party.histories.stdpopsim_single_pop" = ["trajectories.csv"]
+"necast.third_party.histories.stdpopsim_single_pop" = ["trajectories.csv", "LICENSE-stdpopsim.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

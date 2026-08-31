@@ -483,6 +483,17 @@ def sample_maps_for_source(
         obs_rec_pos, obs_rec_rate = rec_pos.copy(), rec_rate.copy()
         obs_mut_pos, obs_mut_rate = mut_pos.copy(), mut_rate.copy()
         meta.update({
+            # A constant map has no spatial structure to mis-measure, so the
+            # observed copy is the truth and no observation noise is applied.
+            # The rate is taken as known, which is what every method in this
+            # field assumes of mu, so this is a modelling choice rather than an
+            # oversight -- but it was previously invisible. The other two
+            # sources record ``observed_noise_sigma`` and these two recorded
+            # nothing, so a consumer reading the metadata could not tell which
+            # convention a row followed, and could not stratify by it.
+            "observed_noise_sigma": 0.0,
+            "observed_noise_sigma_mut": 0.0,
+            "observed_map_is_exact": True,
             "map_type": "constant_clean",
             "map_mode": "constant_clean",
             "recomb_mode": "constant",
@@ -498,6 +509,9 @@ def sample_maps_for_source(
         obs_rec_pos, obs_rec_rate = rec_pos.copy(), rec_rate.copy()
         obs_mut_pos, obs_mut_rate = mut_pos.copy(), mut_rate.copy()
         meta.update({
+            "observed_noise_sigma": 0.0,
+            "observed_noise_sigma_mut": 0.0,
+            "observed_map_is_exact": True,
             "map_type": "constant_random_global",
             "map_mode": "constant_random_global",
             "recomb_mode": "constant_random_global",
@@ -533,7 +547,14 @@ def sample_maps_for_source(
             "map_mode": "empirical_slice",
             "recomb_mode": "empirical_slice",
             "mu_mode": "empirical_slice",
-            "observed_noise_sigma": obs_noise,
+            # The slices above were drawn with ``empirical_noise``, not with
+            # ``obs_noise``: a measured map disagrees with the truth by more
+            # than a synthetic one does, which is why the two have separate
+            # settings.  Recording ``obs_noise`` here reported a sigma that was
+            # applied to no array in the row.
+            "observed_noise_sigma": empirical_noise,
+            "observed_noise_sigma_mut": empirical_noise * 0.6,
+            "observed_map_is_exact": False,
             "slice_alignment": "shared_chromosomal_interval",
             "slice_chrom": chrom,
             "slice_start_bp": shared_start,
@@ -551,6 +572,12 @@ def sample_maps_for_source(
         )
         meta.update({
             "source_type": source,
+            # Also at the top level, where the other three sources put it: a
+            # consumer should not have to know which source drew a row in order
+            # to know where its observation model is recorded.
+            "observed_noise_sigma": obs_noise,
+            "observed_noise_sigma_mut": obs_noise * 0.6,
+            "observed_map_is_exact": False,
             "map_type": "synthetic_heterogeneous",
             "map_mode": "synthetic_heterogeneous",
             "recomb_mode": "synthetic_heterogeneous",

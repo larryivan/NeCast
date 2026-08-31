@@ -15,7 +15,7 @@ dlcoalsim --preset mini --out-dir runs/first
 ```
 
 That writes 512 rows in a few minutes. `--preset core_v01` is 20,000 rows at
-10 Mb; `--preset full_v01` is 100,000 rows at 20 Mb.
+10 Mb; `--preset full_v01` is 100,000 rows at 30 Mb.
 
 ## Reading a dataset
 
@@ -117,7 +117,7 @@ underscores turned into dashes. `--preset` sets a coherent group of them:
 | --- | --- | --- | --- |
 | `mini` | 512 | 1 Mb | 24 |
 | `core_v01` | 20,000 | 10 Mb | 64 |
-| `full_v01` | 100,000 | 20 Mb | 64 |
+| `full_v01` | 100,000 | 30 Mb | 128 |
 
 Useful ones beyond the preset:
 

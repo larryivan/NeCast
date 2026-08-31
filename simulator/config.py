@@ -397,6 +397,20 @@ class Config:
     arg_fraction: float = 1.0
     include_truth: bool = True
     truth_fraction: float = 0.02
+    # Partition what is left to do rather than what there is to do.
+    #
+    # Chunks are dealt out by ``chunk_idx % world_size``, so a rank that dies
+    # leaves every one of its unfinished chunks in a single residue class, and
+    # a resume at the same world size deals that whole backlog straight back to
+    # one rank.  A production sweep hit exactly that: one rank held 45 of the
+    # 210 remaining chunks while most held one or two, and the wall clock was
+    # three serial waves on that one rank.  With this set, each rank first
+    # learns which chunks are still missing and then takes its share of those,
+    # so a dead rank's backlog spreads.  It costs a full scan of the chunk
+    # space per rank instead of a scan of that rank's share, which is only
+    # worth paying when most chunks are already done -- so it is off by default
+    # and belongs on resume and sweep passes.
+    rebalance_pending: bool = False
     max_retries: int = 3
 
 
@@ -492,16 +506,6 @@ def validate_config(cfg: Config) -> None:
             raise ValueError(f"{min_name} must be between 0 and 1")
         if not 0.0 <= maximum <= 1.0:
             raise ValueError(f"{max_name} must be between 0 and 1")
-        if minimum > maximum:
-            raise ValueError(f"{min_name} must not exceed {max_name}")
-
-    def nonnegative_range(min_name: str, max_name: str) -> None:
-        minimum = finite(min_name)
-        maximum = finite(max_name)
-        if minimum < 0.0:
-            raise ValueError(f"{min_name} must be non-negative")
-        if maximum < 0.0:
-            raise ValueError(f"{max_name} must be non-negative")
         if minimum > maximum:
             raise ValueError(f"{min_name} must not exceed {max_name}")
 

@@ -21,7 +21,6 @@ from .config import (
 from .ne_templates import empirical_ne_templates_available, load_empirical_ne_templates
 from .stdpopsim_templates import (
     choose_stdpopsim_template,
-    stdpopsim_templates_available,
 )
 from .utils import (
     bin_average_log10_ne,

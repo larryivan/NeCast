@@ -25,13 +25,17 @@ plausible-looking maps:
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
 from simulator.config import Config, apply_preset
+from simulator.empirical_maps import EmpiricalMapStore
 from simulator.maps import (
     HOTSPOT_WIDTH_BP,
     MAX_SYNTHETIC_RATE_MULTIPLIER,
+    sample_maps_for_source,
     synthetic_heterogeneous_map,
 )
 
@@ -347,3 +351,58 @@ def test_the_hotspot_dropout_only_applies_where_hotspots_exist() -> None:
             has_hotspots=True,
         )[1]
         assert not np.array_equal(quiet, loud)
+
+
+def test_every_map_source_records_how_noisy_its_observed_map_is() -> None:
+    """Silence is not the same as zero, and a consumer cannot tell them apart.
+
+    Two of the four sources publish the observed map as a bit-identical copy of
+    the truth: a constant map has no spatial structure to mis-measure, and the
+    rate is taken as known, which is what every method in this field assumes of
+    mu.  That is a modelling choice.  What it must not be is invisible -- the
+    other two sources recorded ``observed_noise_sigma`` and these two recorded
+    nothing, so nothing downstream could tell which convention a row followed,
+    and no result could be stratified by it.
+    """
+
+    cfg = apply_preset(Config(preset="core_v01"))
+    # None of the three sources exercised here reads the empirical store, so an
+    # empty one keeps the test independent of the shipped map files.
+    store = EmpiricalMapStore()
+    expected = {
+        "clean_constant_map": (0.0, 0.0, True),
+        "random_global_mu_r": (0.0, 0.0, True),
+        "custom_heterogeneous": (
+            cfg.observed_map_noise,
+            cfg.observed_map_noise * 0.6,
+            False,
+        ),
+    }
+    for source, (rec, mut, is_exact) in expected.items():
+        rng = np.random.default_rng(20260830)
+        *_, meta = sample_maps_for_source(rng, cfg, source, store)
+        assert meta["observed_noise_sigma"] == pytest.approx(rec), source
+        assert meta["observed_noise_sigma_mut"] == pytest.approx(mut), source
+        assert meta["observed_map_is_exact"] is is_exact, source
+
+
+def test_the_empirical_slice_reports_the_sigma_it_was_drawn_with() -> None:
+    """The recorded value was one that no array in the row had seen.
+
+    Empirical slices are drawn with ``empirical_map_noise``, which is separate
+    from ``observed_map_noise`` precisely because a measured map disagrees with
+    the truth by more than a synthetic one does.  The metadata reported the
+    latter, so for a fifth of every cohort the published observation model was
+    neither the one applied to the recombination map nor the one applied to the
+    mutation map.
+    """
+
+    cfg = apply_preset(Config(preset="full_v01"))
+    assert cfg.empirical_map_noise != cfg.observed_map_noise, (
+        "this test cannot distinguish the two settings unless they differ"
+    )
+    source = inspect.getsource(sample_maps_for_source)
+    empirical = source.split('elif source == "empirical_map_slice"')[1]
+    empirical = empirical.split("else:")[0]
+    assert '"observed_noise_sigma": empirical_noise,' in empirical
+    assert '"observed_noise_sigma": obs_noise,' not in empirical

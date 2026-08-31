@@ -229,21 +229,6 @@ def map_rate_offsets(offsets: np.ndarray) -> np.ndarray:
     return np.concatenate(([0], np.cumsum(np.maximum(lengths - 1, 0))))
 
 
-def map_slice(
-    positions: np.ndarray,
-    rates: np.ndarray,
-    offsets: np.ndarray,
-    row: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """One row's piecewise map: its breakpoints and the rates between them."""
-
-    rate_offsets = map_rate_offsets(offsets)
-    return (
-        positions[int(offsets[row]) : int(offsets[row + 1])],
-        rates[int(rate_offsets[row]) : int(rate_offsets[row + 1])],
-    )
-
-
 def concat_with_offsets(arrs: list[np.ndarray], dtype=None) -> tuple[np.ndarray, np.ndarray]:
     offsets = [0]
     total = 0
@@ -1377,6 +1362,13 @@ def _metadata_row(meta: dict) -> dict:
         "template_max_Ne": meta.get("template_max_Ne", 0.0),
         "map_type": meta.get("map_type", ""),
         "map_mode": meta.get("map_mode", ""),
+        # How far the observed maps were drawn from the true ones, per map,
+        # and whether they were drawn from them at all.  Every source records
+        # these now, so a consumer can stratify on the observation model
+        # without knowing which source drew the row.
+        "observed_noise_sigma": meta.get("observed_noise_sigma", 0.0),
+        "observed_noise_sigma_mut": meta.get("observed_noise_sigma_mut", 0.0),
+        "observed_map_is_exact": bool(meta.get("observed_map_is_exact", False)),
         "recomb_mode": meta.get("recomb_mode", ""),
         "mu_mode": meta.get("mu_mode", ""),
         "noise_profile": meta.get("noise_profile", ""),
@@ -1912,7 +1904,11 @@ def _fragment_layout(cfg: Config) -> dict[str, object]:
         "n_chunks": len(compute_jobs),
         "sample_id_rule": "sim_{global_sample_index:08d}",
         "seed_rule": "config.seed + global_sample_index * 7919",
-        "partition_rule": "chunk_idx_mod_world_size",
+        "partition_rule": (
+            "outstanding_position_mod_world_size"
+            if getattr(cfg, "rebalance_pending", False)
+            else "chunk_idx_mod_world_size"
+        ),
         "array_schema_version": int(SAMPLE_GENERATOR_SCHEMA_VERSION),
     }
 
@@ -2415,12 +2411,28 @@ def _generate_rank_while_active(
         )
         is not None
     }
-    assigned_jobs = [
-        task
-        for task in all_jobs
-        if task[0] % world_size == rank
-        and task[1] not in committed_shards
+    candidate_jobs = [
+        task for task in all_jobs if task[1] not in committed_shards
     ]
+    if getattr(cfg, "rebalance_pending", False):
+        # Deal out what is missing, not what exists: see ``rebalance_pending``.
+        outstanding = [
+            task
+            for task in candidate_jobs
+            if _load_committed_fragment_result(
+                task, cfg, plan_sha256, full_hash=False, structural=False
+            )
+            is None
+        ]
+        assigned_jobs = [
+            task
+            for position, task in enumerate(outstanding)
+            if position % world_size == rank
+        ]
+    else:
+        assigned_jobs = [
+            task for task in candidate_jobs if task[0] % world_size == rank
+        ]
     committed_results: list[dict] = []
     pending_jobs: list[tuple[int, int, int, int]] = []
     for task in assigned_jobs:

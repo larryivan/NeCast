@@ -1,7 +1,10 @@
 # Third-party code and data
 
-These files come from other projects and keep their own terms, given below
-for each. The MIT licence of NeCast covers its own code, not these files.
+The maps, histories and gap table here, and PSMC+'s `transition_matrix.py`,
+come from other projects and keep their own terms, given below for each. The
+two build scripts, `maps/build_decode2019.py` and
+`histories/build_stdpopsim_single_pop.py`, are NeCast's own code under its MIT
+licence.
 
 ## psmcplus/
 

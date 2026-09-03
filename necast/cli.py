@@ -290,7 +290,7 @@ def check_grch38(vcf, names, lengths):
 def read_map(path, names, kind, scale=1.0):
     try:
         rates = maps.read(path, scale)
-    except ValueError:                    # e.g. a map in HapMap format: position, rate, cM
+    except ValueError:                    # e.g. a map in HapMap format: chromosome, position, rate, cM
         rates = {}
     if not rates:
         raise InputError(f"cannot read the {kind} map {path}: a map is a BED file of chromosome, start, end and "

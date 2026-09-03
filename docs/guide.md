@@ -100,8 +100,7 @@ chromosome  start  end  rate
 ```
 
 A map in HapMap format (chromosome, position, rate in cM/Mb, position in cM,
-with a header line), as the HapMap and 1000 Genomes maps are, becomes such a
-file with
+with a header line) becomes such a file with
 
 ```bash
 awk 'NR > 1 {if ($1 == c) print c "\t" p "\t" $2 "\t" r; c = $1; p = $2; r = $3}' map.txt > map.bed

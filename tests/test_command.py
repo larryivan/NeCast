@@ -73,14 +73,21 @@ def test_a_window_without_sites_is_left_out(tmp_path):
 
 @needs_tabix
 def test_a_group_without_variable_sites_is_left_out(tmp_path):
-    # every call './.', as bcftools merge writes for samples from a batch without this chromosome
-    def no_calls(line):
+    # 32 samples whose calls are all './.' before the example's 32, as bcftools merge writes
+    # for samples from a batch without this chromosome
+    def widen(line):
+        if line.startswith("##"):
+            return line
         fields = line.split("\t")
-        return "\t".join(fields[:9] + ["./."] * (len(fields) - 9))
-    vcf = example_vcf(tmp_path, lambda lines: [line if line.startswith("#") else no_calls(line) for line in lines])
-    with pytest.raises(cli.InputError, match="no window"):
-        cli.run(vcf, MASK, tmp_path / "out", mu=1e-8, rec_rate=1e-8)
-    assert "no site varies among the individuals; left out" in (tmp_path / "out" / "log.txt").read_text()
+        added = [f"missing{i}" for i in range(32)] if line.startswith("#") else ["./."] * 32
+        return "\t".join(fields[:9] + added + fields[9:])
+    vcf = example_vcf(tmp_path, lambda lines: [widen(line) for line in lines])
+    cli.run(vcf, MASK, tmp_path / "out", mu=1e-8, rec_rate=1e-8)
+    log = (tmp_path / "out" / "log.txt").read_text()
+    assert "no site varies among the individuals of group 1; left out" in log
+    assert ": 1 window;" in log
+    rows = (tmp_path / "out" / "windows.tsv").read_text().splitlines()[1:]
+    assert [row.split("\t")[3] for row in rows] == ["2"]
 
 
 def test_errors_are_reported_without_a_traceback():

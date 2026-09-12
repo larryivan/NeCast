@@ -9,11 +9,14 @@ with `bgzip data.vcf`.
 
 **`found no window`**
 No chromosome has 30 Mb of accessible sequence without a masked stretch
-longer than 1 Mb, or the VCF has no sites there. Check that the mask covers
-the chromosomes you expect (`awk '{n[$1] += $3 - $2} END {for (c in n) print
-c, n[c]}' mask.bed` prints the accessible length of each), that it is not cut
-into pieces by many long gaps, and that the VCF holds those chromosomes. Small
-chromosomes and very fragmented assemblies may give no window at all.
+longer than 1 Mb, or the VCF has no sites there, or the individuals read vary
+at none of them, as when all their calls there are missing (the log names
+each group left out). Check that the mask covers the chromosomes you expect
+(`awk '{n[$1] += $3 - $2} END {for (c in n) print c, n[c]}' mask.bed` prints
+the accessible length of each), that it is not cut into pieces by many long
+gaps, and that the VCF holds those chromosomes, with calls for the
+individuals read. Small chromosomes and very fragmented assemblies may give
+no window at all.
 
 **`NeCast reads 32 diploid individuals at a time, and there are only ...`**
 The network was trained on 32 individuals and cannot read fewer.

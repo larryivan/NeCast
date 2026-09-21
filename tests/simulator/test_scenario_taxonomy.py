@@ -230,13 +230,12 @@ def test_the_out_of_africa_chain_holds_the_bottleneck_open() -> None:
 
 
 # --------------------------------------------------------------------------
-# The held-out catalogue
+# The stdpopsim catalogue
 # --------------------------------------------------------------------------
 
 
 def test_the_literature_anchors_carry_weight() -> None:
-    """At zero weight they are never drawn, and an evaluation set that was
-    never generated cannot be held out of anything."""
+    """At zero weight they are never drawn."""
 
     cfg = Config()
     assert cfg.p_stdpopsim_single_pop > 0.0
@@ -303,7 +302,7 @@ def test_the_smcpp_sawtooth_is_the_same_history_as_zigzag_1s14() -> None:
     assert difference > 0.0, "and they are not literally the same numbers"
 
 
-def test_the_stdpopsim_catalogue_is_broad_and_verbatim() -> None:
+def test_the_stdpopsim_catalogue_is_broad_and_in_band() -> None:
     templates = load_stdpopsim_templates(Config())
     assert len(templates) == 18
     assert len({template.species for template in templates}) == 8
@@ -314,14 +313,13 @@ def test_the_stdpopsim_catalogue_is_broad_and_verbatim() -> None:
     assert len(drawable) == 18
     assert len({template.species for template in drawable}) == 8
     # Every trajectory sits inside the declared band, by construction rather
-    # than by clipping: clipping would flatten the very features these models
-    # are held out to test.
+    # than by clipping, which would flatten their features.
     for template in templates:
         assert min(template.values) >= NE_BOUNDS[0] * (1 - 1e-9)
         assert max(template.values) <= NE_BOUNDS[1] * (1 + 1e-9)
 
 
-def test_held_out_rows_are_labelled_so_a_split_can_find_them() -> None:
+def test_catalogue_rows_are_labelled_so_a_split_can_find_them() -> None:
     seen = set()
     for _, meta in _draw("stdpopsim_single_pop", n=200):
         assert meta["held_out_evaluation"] is True
@@ -724,8 +722,8 @@ def test_every_sampler_parameter_reaches_the_shard_row() -> None:
     names supported can still be made at analysis time, on realised parameters
     rather than on which sampler was called.  That claim is only true if the
     parameters are actually written.  When this test was added they were not:
-    ``held_out_evaluation`` never reached disk, which is the flag a split uses
-    to keep the stdpopsim catalogue out of the training gradient, and with it
+    ``held_out_evaluation`` never reached disk, which is the flag a split could
+    use to keep the stdpopsim catalogue out of the training gradient, and with it
     went ``stdpopsim_model_id``, every ``event_``, ``ooa_``, ``oscillation_``
     and ``template_`` parameter, and ``knot_count``.
     """
@@ -768,12 +766,8 @@ def test_every_sampler_parameter_reaches_the_shard_row() -> None:
 
 
 def test_the_held_out_flag_survives_to_disk() -> None:
-    """Stated on its own because it is the one that breaks silently.
-
-    Everything else being dropped costs an analysis; this one costs the
-    evaluation design -- the catalogue rows would be trained on, and error
-    measured on them would stop being evidence about generalisation.
-    """
+    """Stated on its own because it is the one that breaks silently: without
+    it on disk, a split could not find the catalogue rows."""
 
     import dataclasses
 

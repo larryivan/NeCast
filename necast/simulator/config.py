@@ -217,16 +217,15 @@ class Config:
     p_empirical_slice: float = 0.20
     p_stdpopsim_anchor: float = 0.00
 
-    # The demography mixture.  Two rules shape it.  First, an axis that is
-    # continuous in nature is one sampler with a continuous parameter, not
-    # several samplers pinned to points along it -- the previous mixture had
-    # 27 named recipes and a measured pairwise separability as low as 0.283
-    # against a 0.500 chance rate.  Second, training weight and evaluation
-    # weight are different things: the last three entries are histories other
-    # people published, and rows drawn from them carry
-    # ``held_out_evaluation`` or ``literature_demography_anchor`` so a split
-    # can keep them out of the training gradient.  necast train reads neither
-    # and fits these rows like the others.
+    # The demography mixture.  One rule shapes it: an axis that is continuous
+    # in nature is one sampler with a continuous parameter, not several
+    # samplers pinned to points along it -- the previous mixture had 27 named
+    # recipes and a measured pairwise separability as low as 0.283 against a
+    # 0.500 chance rate.  The last two entries are drawn from histories other
+    # people published; the stdpopsim rows carry ``held_out_evaluation`` and
+    # ``literature_demography_anchor``, which a split could use to keep them
+    # out of the training gradient.  necast train reads neither and fits them
+    # like the others.
     # Weights were set against a measured quantity rather than a feeling: for
     # each recipe, the share of its rows whose label standard deviation is
     # under 0.24 -- the level every architecture arm sits at, so on those rows

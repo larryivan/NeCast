@@ -421,7 +421,7 @@ def test_native_literature_model_survives_full_sample_generation() -> None:
     assert meta["demography_type"] == "stdpopsim"
     assert meta["generator_recipe"] == "stdpopsim_single_pop"
     assert meta["scenario"] == "stdpopsim_single_pop"
-    # The row has to say it is held out, or the split cannot route it.
+    # The row has to carry the flag, or a split cannot find it.
     assert meta["held_out_evaluation"] is True
     assert meta["literature_demography_anchor"] is True
     assert meta["demography_growth_rates"][-1] == 0.0
@@ -654,9 +654,7 @@ def test_the_declared_versions_match_what_the_generator_writes() -> None:
 
     cfg = Config()
     assert cfg.demography_mixture_version == "v1"
-    # The held-out catalogue must carry weight.  At zero it is never drawn,
-    # which leaves nothing to evaluate on -- an evaluation set still has to be
-    # generated before it can be held out.
+    # The stdpopsim catalogue must carry weight; at zero it is never drawn.
     assert cfg.p_stdpopsim_single_pop > 0.0
     assert cfg.p_spectral_walk == pytest.approx(0.20)
     assert SAMPLE_GENERATOR_SCHEMA_VERSION == 1

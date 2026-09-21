@@ -1555,8 +1555,8 @@ def _stdpopsim_single_pop(rng: np.random.Generator, cfg: Config, edges: np.ndarr
 
     These rows carry ``held_out_evaluation``, which a split could use to keep
     them out of the training gradient.  necast train does not read it and fits
-    them like any other row; to test on these histories, train with
-    ``--p-stdpopsim-single-pop 0``.
+    them like any other row; to test on these histories, train on windows
+    simulated with ``--p-stdpopsim-single-pop 0``.
     """
 
     template = choose_stdpopsim_template(rng, cfg)

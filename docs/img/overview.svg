@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 300" role="img" aria-label="NeCast reads genotypes, a mask, a mutation rate and a recombination map or rate, and returns the population size in 64 time intervals as a table and a figure">
+  <title>What NeCast reads and what it returns</title>
+  <rect x="0.5" y="0.5" width="839" height="299" rx="10" fill="#FFFFFF" stroke="#D5DAE0"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <!-- column headings -->
+    <g font-size="11" font-weight="600" letter-spacing="1.2" fill="#7D838B">
+      <text x="24" y="38">YOU GIVE</text>
+      <text x="300" y="38">NECAST</text>
+      <text x="600" y="38">YOU GET</text>
+    </g>
+
+    <!-- you give -->
+    <g fill="#F7F8FA" stroke="#D5DAE0">
+      <rect x="24" y="56" width="236" height="46" rx="6"/>
+      <rect x="24" y="110" width="236" height="46" rx="6"/>
+      <rect x="24" y="164" width="236" height="46" rx="6"/>
+      <rect x="24" y="218" width="236" height="46" rx="6"/>
+    </g>
+    <g font-size="13" font-weight="600" fill="#1F2328">
+      <text x="36" y="76">Genotypes</text>
+      <text x="36" y="130">Mask</text>
+      <text x="36" y="184">Mutation rate</text>
+      <text x="36" y="238">Recombination</text>
+    </g>
+    <g font-size="11.5" fill="#6B7078">
+      <text x="36" y="93">VCF or BCF of 32 or more individuals</text>
+      <text x="36" y="147">BED of the callable sequence</text>
+      <text x="36" y="201">per bp per generation</text>
+      <text x="36" y="255">a map in cM/Mb, or one rate</text>
+    </g>
+    <text x="24" y="284" font-size="11" fill="#7D838B">For human data, <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#4A4F57">--human</tspan> supplies the last two.</text>
+
+    <!-- arrows -->
+    <g stroke="#9AA0A7" stroke-width="1.5" fill="#9AA0A7">
+      <path d="M267 160H285" fill="none"/>
+      <path d="M285 155.5L293 160L285 164.5Z" stroke="none"/>
+      <path d="M563 160H581" fill="none"/>
+      <path d="M581 155.5L589 160L581 164.5Z" stroke="none"/>
+    </g>
+
+    <!-- necast -->
+    <rect x="300" y="56" width="256" height="208" rx="8" fill="#DFDBF1" fill-opacity="0.5" stroke="#AEA6DC"/>
+    <g fill="#FFFFFF" stroke="#AEA6DC">
+      <rect x="312" y="68" width="232" height="56" rx="6"/>
+      <rect x="312" y="132" width="232" height="56" rx="6"/>
+      <rect x="312" y="196" width="232" height="56" rx="6"/>
+    </g>
+    <g fill="#5242A7">
+      <circle cx="334" cy="96" r="11"/>
+      <circle cx="334" cy="160" r="11"/>
+      <circle cx="334" cy="224" r="11"/>
+    </g>
+    <g font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle">
+      <text x="334" y="100.2">1</text>
+      <text x="334" y="164.2">2</text>
+      <text x="334" y="228.2">3</text>
+    </g>
+    <g font-size="13" font-weight="600" fill="#302661">
+      <text x="354" y="92">Cut into windows</text>
+      <text x="354" y="156">Summarise each window</text>
+      <text x="354" y="220">Neural network</text>
+    </g>
+    <g font-size="11.5" fill="#4A4F57">
+      <text x="354" y="109">30 Mb each, in groups of 32</text>
+      <text x="354" y="173">4 summaries, PSMC+ posterior</text>
+      <text x="354" y="237">also reads genotypes and maps</text>
+    </g>
+
+    <!-- you get -->
+    <rect x="600" y="56" width="216" height="120" rx="6" fill="#FFFFFF" stroke="#D5DAE0"/>
+    <text x="612" y="74" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="600" fill="#1F2328">necast.png</text>
+    <path d="M616 82V152H804" fill="none" stroke="#C3C8CF"/>
+    <path d="M616 95.9H618.9V96.0H621.8V95.9H624.7V95.7H627.6V95.8H630.5V95.6H633.4V95.5H636.3V95.5H639.2V95.6H642.2V95.1H645.1V95.2H648.0V94.8H650.9V94.5H653.8V94.9H656.7V95.4H659.6V95.4H662.5V95.2H665.4V95.8H668.3V96.6H671.2V97.6H674.1V99.4H677.0V103.3H679.9V108.8H682.8V115.6H685.8V122.4H688.7V129.0H691.6V135.0H694.5V139.9H697.4V142.5H700.3V141.3H703.2V137.4H706.1V131.0H709.0V122.5H711.9V113.8H714.8V106.6H717.7V101.9H720.6V99.0H723.5V98.2H726.4V98.4H729.3V99.8H732.2V102.1H735.2V105.3H738.1V108.3H741.0V110.7H743.9V113.4H746.8V115.0H749.7V116.6H752.6V117.7H755.5V117.4H758.4V116.3H761.3V113.7H764.2V110.0H767.1V105.9H770.0V101.9H772.9V98.3H775.8V95.8H778.8V94.4H781.7V93.8H784.6V93.5H787.5V93.1H790.4V92.6H793.3V91.8H796.2V90.8H799.1V89.2H802.0" fill="none" stroke="#5242A7" stroke-width="2" stroke-linejoin="round"/>
+    <g font-size="10" fill="#7D838B">
+      <text x="710" y="167" text-anchor="middle">generations ago</text>
+      <text x="609" y="117" text-anchor="middle" transform="rotate(-90 609 117)">Ne</text>
+    </g>
+
+    <path d="M600 209.5H816M600 233.5H816" stroke="#E4E7EB"/>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="600" fill="#1F2328">
+      <text x="600" y="200">necast.tsv</text>
+      <text x="600" y="225">windows.tsv</text>
+      <text x="600" y="250">log.txt</text>
+    </g>
+    <g font-size="11.5" fill="#6B7078">
+      <text x="686" y="200">Ne in 64 intervals</text>
+      <text x="686" y="225">each window and group</text>
+      <text x="686" y="250">what was read</text>
+    </g>
+  </g>
+</svg>

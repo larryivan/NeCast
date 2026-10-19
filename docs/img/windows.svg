@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 190" role="img" aria-label="A chromosome cut into windows of 30 Mb of accessible sequence: a window carries on across a masked stretch of up to 1 Mb, no window crosses a longer one, and a remainder shorter than 30 Mb is left out">
+  <title>How NeCast cuts a chromosome into windows</title>
+  <defs>
+    <clipPath id="chromosome"><rect x="45" y="60" width="750" height="24" rx="5"/></clipPath>
+  </defs>
+  <rect x="0.5" y="0.5" width="839" height="189" rx="10" fill="#FFFFFF" stroke="#D5DAE0"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <!-- windows -->
+    <g font-size="12" font-weight="600" fill="#5242A7" text-anchor="middle">
+      <text x="132.5" y="36">window 1</text>
+      <text x="307.5" y="36">window 2</text>
+      <text x="630" y="36">window 3</text>
+    </g>
+    <g fill="none" stroke="#786AC4" stroke-width="1.5">
+      <path d="M46.5 53V45H218.5V53"/>
+      <path d="M221.5 53V45H393.5V53"/>
+      <path d="M546.5 53V45H713.5V53"/>
+    </g>
+
+    <!-- the chromosome -->
+    <g clip-path="url(#chromosome)">
+      <rect x="45" y="60" width="750" height="24" fill="#786AC4"/>
+      <rect x="125" y="60" width="5" height="24" fill="#C3C8CF"/>
+      <rect x="310" y="60" width="5" height="24" fill="#C3C8CF"/>
+      <rect x="395" y="60" width="80" height="24" fill="#DFDBF1"/>
+      <rect x="475" y="60" width="70" height="24" fill="#C3C8CF"/>
+      <rect x="715" y="60" width="80" height="24" fill="#DFDBF1"/>
+      <rect x="219" y="60" width="2" height="24" fill="#FFFFFF"/>
+    </g>
+
+    <!-- notes -->
+    <g stroke="#9AA0A7">
+      <path d="M127.5 87V101M435 87V101M510 87V101M755 87V101"/>
+    </g>
+    <g font-size="11.5" font-weight="600" fill="#1F2328">
+      <text x="45" y="116">Masked for up to 1 Mb:</text>
+      <text x="470" y="116" text-anchor="end">Less than 30 Mb left:</text>
+      <text x="485" y="116">Masked for more than 1 Mb:</text>
+      <text x="795" y="116" text-anchor="end">Less than 30 Mb left:</text>
+    </g>
+    <g font-size="11.5" fill="#6B7078">
+      <text x="45" y="131">the window carries on across it</text>
+      <text x="470" y="131" text-anchor="end">not read</text>
+      <text x="485" y="131">no window crosses it</text>
+      <text x="795" y="131" text-anchor="end">not read</text>
+    </g>
+
+    <!-- legend -->
+    <rect x="45" y="155" width="12" height="12" rx="2" fill="#786AC4"/>
+    <rect x="345" y="155" width="12" height="12" rx="2" fill="#DFDBF1"/>
+    <rect x="555" y="155" width="12" height="12" rx="2" fill="#C3C8CF"/>
+    <g font-size="11.5" fill="#4A4F57">
+      <text x="63" y="165">accessible, in a window (30 Mb each)</text>
+      <text x="363" y="165">accessible, in no window</text>
+      <text x="573" y="165">masked</text>
+    </g>
+  </g>
+</svg>

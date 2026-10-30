@@ -1,23 +1,40 @@
+[NeCast](../README.md) · **Guide** · [Questions](faq.md) · [Simulating](simulate.md) · [Training](train.md)
+
 # Guide
+
+Every option, input and output of `necast run`.
 
 ```
 necast run VCF --mask BED --out FOLDER [options]
 ```
 
-| Option | Meaning |
-|---|---|
-| `--mask BED` | the accessible sequence (required) |
-| `--out FOLDER` | where to write the results (required) |
-| `--human` | human data on GRCh38: see [Human data](#human-data) |
-| `--mu RATE` | mutation rate per bp per generation (required unless `--human`) |
-| `--rec-rate RATE` | one recombination rate per bp per generation for the whole genome (this or `--rec-map` is required unless `--human`) |
-| `--rec-map BED` | recombination map in cM/Mb, instead of `--rec-rate` |
-| `--mut-map BED` | relative mutation rates along the genome |
-| `--samples FILE` | the individuals to read, one per line (default: every sample in the VCF) |
-| `--chromosomes LIST` | chromosomes to read, such as `1,2,3` (default: every chromosome in both the VCF and the mask except X, Y and the mitochondria; with `--human`, 1 to 22) |
-| `--generation-time YEARS` | adds times in years to the table and the figure |
-| `--weights FILE` | a network trained with `necast train` (default: the published one) |
-| `--threads N` | CPU threads (default: all) |
+- [Options](#options)
+- [Inputs](#inputs): [genotypes](#genotypes), [individuals](#individuals),
+  [mask and windows](#mask-and-windows), [mutation rate](#mutation-rate),
+  [recombination](#recombination), [mutation map](#mutation-map),
+  [human data](#human-data), [warnings](#warnings)
+- [Outputs](#outputs): [necast.tsv](#necasttsv), [windows.tsv](#windowstsv),
+  [necast.png](#necastpng), [log.txt](#logtxt),
+  [reading the results](#reading-the-results)
+- [Time and memory](#time-and-memory)
+- [How NeCast works](#how-necast-works)
+
+## Options
+
+| Option | Meaning | Default |
+|:---|:---|:---|
+| `--mask BED` | the accessible sequence | required |
+| `--out FOLDER` | where to write the results | required |
+| `--human` | human data on GRCh38: see [Human data](#human-data) | off |
+| `--mu RATE` | mutation rate per bp per generation | required; with `--human`, 1.29e-8 |
+| `--rec-rate RATE` | one recombination rate per bp per generation for the whole genome | this or `--rec-map` is required unless `--human` |
+| `--rec-map BED` | recombination map in cM/Mb, instead of `--rec-rate` | with `--human`, the deCODE map |
+| `--mut-map BED` | relative mutation rates along the genome | the same rate everywhere; with `--human`, the Roulette map |
+| `--samples FILE` | the individuals to read, one per line | every sample in the VCF |
+| `--chromosomes LIST` | chromosomes to read, such as `1,2,3` | every chromosome in both the VCF and the mask except X, Y and the mitochondria; with `--human`, 1 to 22 |
+| `--generation-time YEARS` | adds times in years to the table and the figure | times in generations only |
+| `--weights FILE` | a network trained with `necast train` | the published network |
+| `--threads N` | CPU threads | all |
 
 `necast run --help` prints the same list.
 
@@ -33,28 +50,40 @@ chr2.vcf.gz ...` and index the result. NeCast reads, in each window:
 - biallelic SNVs whose FILTER is `PASS` or `.`; other records are skipped;
 - at a position with two or more such records, none of them;
 - diploid genotypes, phased or not. Missing calls (`./.` or `.`) and
-  half-missing calls (`0/.`) are allowed. Haploid calls stop the run, so leave out chrX in
-  males, chrY and the mitochondria.
+  half-missing calls (`0/.`) are allowed. Haploid calls stop the run, so leave
+  out chrX in males, chrY and the mitochondria.
 
 The reference allele is taken as the ancestral one, as in the paper's
 analysis of the 1000 Genomes Project; the genotypes need no polarisation.
 
-Filter genotypes by call quality only. Filtering by allele frequency,
-removing singletons or pruning for linkage disequilibrium removes the signal
-NeCast reads.
+> [!IMPORTANT]
+> Filter genotypes by call quality only. Filtering by allele frequency,
+> removing singletons or pruning for linkage disequilibrium removes the signal
+> NeCast reads.
 
 ### Individuals
 
 NeCast reads 32 diploid individuals at a time, because that is what the
 network was trained on. They should come from one population and be
 unrelated: close relatives share long stretches of their genomes, which looks
-like a small recent population (`plink2 --king-cutoff` finds them). With 64 individuals NeCast reads two groups of 32 and averages
-them; individuals left over after the last full group are not read.
+like a small recent population (`plink2 --king-cutoff` finds them).
+
+With more than 32 individuals, NeCast reads them in groups of 32 and averages
+the groups; individuals left over after the last full group are not read.
+
+| Individuals | Groups of 32 | Not read |
+|:---|:---|:---|
+| 32 | 1 | 0 |
+| 50 | 1 | 18 |
+| 64 | 2 | 0 |
+| 100 | 3 | 4 |
 
 `--samples` gives the individuals in a text file, one sample name per line, as
-in the VCF header. Groups are formed in the order of the file. Without
-`--samples` NeCast reads every sample in the VCF, so make sure they all belong
-to one population.
+in the VCF header. Groups are formed in the order of the file.
+
+> [!NOTE]
+> Without `--samples` NeCast reads every sample in the VCF, so make sure they
+> all belong to one population.
 
 ### Mask and windows
 
@@ -67,14 +96,22 @@ is a good choice; for other species, use the callable regions of your
 variant-calling pipeline.
 
 NeCast cuts each chromosome into windows of exactly 30 Mb of accessible
-sequence. A window may span masked stretches of up to 1 Mb; a longer one ends
-the current run of sequence. Each run is cut from left to right, and a
-remainder shorter than 30 Mb is left out. Inside a window the accessible
-pieces are joined end to end. A chromosome with less than 30 Mb of accessible
-sequence in one run gives no window. A window with no site in the VCF (on a
-chromosome the VCF does not hold, for example) is left out, and so is a group
-of 32 whose individuals vary at no site in a window, as when all their calls
-there are missing; the log says so.
+sequence:
+
+<p align="center">
+  <img src="img/windows.svg" width="840" alt="A chromosome cut into windows of 30 Mb of accessible sequence. A window carries on across a masked stretch of up to 1 Mb, no window crosses a longer one, and a remainder shorter than 30 Mb is not read.">
+</p>
+
+- A window may span masked stretches of up to 1 Mb; a longer one ends the
+  current run of sequence.
+- Each run is cut from left to right, and a remainder shorter than 30 Mb is
+  left out. A chromosome with less than 30 Mb of accessible sequence in one
+  run gives no window.
+- Inside a window the accessible pieces are joined end to end.
+- A window with no site in the VCF (on a chromosome the VCF does not hold, for
+  example) is left out, and so is a group of 32 whose individuals vary at no
+  site in a window, as when all their calls there are missing; the log says
+  so.
 
 Chromosome names may carry `chr` or not: `chr1` and `1` are the same
 chromosome in every file.
@@ -94,7 +131,7 @@ Give either one rate for the whole genome (`--rec-rate`, per bp per
 generation) or a map (`--rec-map`). A map is a BED file of rates in cM/Mb:
 
 ```
-chromosome  start  end  rate
+chromosome  start  end    rate
 1           0      52000  0.53
 1           52000  71400  2.91
 ```
@@ -144,19 +181,24 @@ the mask.
 ### Warnings
 
 NeCast warns when the data are unlike the training simulations, where the
-estimates are less certain: a mutation rate outside 6.25e-9 to 2.5e-8, a
-window whose mean recombination rate is outside 1.7e-9 to 3e-8 per bp, or a
-group with more than 2% of its allele calls missing. The run goes on; the
-warnings are in `log.txt`.
+estimates are less certain:
+
+- a mutation rate outside 6.25e-9 to 2.5e-8;
+- a window whose mean recombination rate is outside 1.7e-9 to 3e-8 per bp;
+- a group with more than 2% of its allele calls missing.
+
+The run goes on; the warnings are in `log.txt`.
 
 ## Outputs
+
+NeCast writes four files to the folder given by `--out`.
 
 ### necast.tsv
 
 The estimate, one row per time interval:
 
 | Column | Meaning |
-|---|---|
+|:---|:---|
 | `interval` | 1 to 64, from recent to ancient |
 | `start_generations`, `end_generations` | the interval, in generations before the present |
 | `start_years`, `end_years` | the same in years, with `--generation-time` |
@@ -177,6 +219,17 @@ much the estimate varies along the genome.
 
 Every window's estimate in grey and their mean in purple, on log scales.
 
+<p align="center">
+  <img src="img/yri.png" width="560" alt="Population size of the Yoruba through time: 51 grey curves, one per window, and their mean in purple">
+  <br>
+  <sub>The paper's estimate for the Yoruba (YRI) of the 1000 Genomes Project, drawn the same way: 51 windows in grey and their mean in purple.</sub>
+</p>
+
+### log.txt
+
+Everything NeCast printed during the run: what was read, each window, the
+warnings and the time taken. A new run in the same folder adds to the file.
+
 ### Reading the results
 
 In Python:
@@ -196,14 +249,22 @@ estimate <- read.delim("results/necast.tsv")
 
 A window of 32 individuals takes a few seconds to estimate with 16 CPU
 threads, and about half a minute with one; most of it goes to the PSMC+
-posterior. Reading the VCF can take longer than that when the file holds many
-more samples than the ones read: a window of the 1000 Genomes 30x panel, with
-3,202 samples, took about a minute in all. To run several analyses on the same
-individuals, extract them once with `bcftools view -S samples.txt -Oz -o
-mine.vcf.gz data.vcf.gz` and index the result. The run needs about 4 GB of
-memory.
+posterior. The run needs about 4 GB of memory.
+
+Reading the VCF can take longer than that when the file holds many more
+samples than the ones read: a window of the 1000 Genomes 30x panel, with
+3,202 samples, took about a minute in all.
+
+> [!TIP]
+> To run several analyses on the same individuals, extract them once with
+> `bcftools view -S samples.txt -Oz -o mine.vcf.gz data.vcf.gz` and index the
+> result.
 
 ## How NeCast works
+
+<p align="center">
+  <img src="img/overview.svg" width="840" alt="NeCast takes genotypes, a mask, a mutation rate and a recombination map or rate. It cuts the genome into windows, summarises each window and gives it to a neural network. It writes the population size in 64 time intervals as a table and a figure.">
+</p>
 
 For each window and group of 32, NeCast computes four summaries of the
 genotypes (the folded site-frequency spectrum, linkage disequilibrium by

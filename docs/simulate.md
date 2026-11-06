@@ -1,24 +1,43 @@
+[NeCast](../README.md) · [Guide](guide.md) · [Questions](faq.md) · **Simulating** · [Training](train.md)
+
 # Simulating windows
 
 `necast simulate` makes simulated windows like the ones NeCast was trained and
 tested on: genotypes of a sample of individuals, the maps a method would be
-given, and the true size history. It needs a few extra packages:
+given, and the true size history.
+
+- [Quick start](#quick-start)
+- [Options](#options)
+- [What a dataset holds](#what-a-dataset-holds)
+- [What a window can be](#what-a-window-can-be): [size histories](#size-histories),
+  [maps](#maps), [sequencing errors](#sequencing-errors)
+- [Simulating a history of your own](#simulating-a-history-of-your-own)
+- [The data that ships with the package](#the-data-that-ships-with-the-package)
+- [Tests](#tests)
+
+## Quick start
+
+The simulator needs a few extra packages:
 
 ```bash
 pip install "necast[simulate] @ git+https://github.com/larryivan/NeCast"
 ```
 
-## Quick start
+Then simulate:
 
 ```bash
 necast simulate --preset mini --n-samples 20 --out-dir simulations
 ```
 
-writes 20 windows of 1 Mb with 12 individuals each, in about a minute. The
-paper's windows are made with `--preset full_v01`: 30 Mb and 64 individuals.
+This writes 20 windows of 1 Mb with 12 individuals each, in about a minute.
+
+## Options
+
+A preset sets the size of the dataset. The paper's windows are made with
+`--preset full_v01`: 30 Mb and 64 individuals.
 
 | Preset | Windows | Length | Individuals |
-|---|---|---|---|
+|:---|:---|:---|:---|
 | `mini` | 512 | 1 Mb | 12 |
 | `core_v01` | 20,000 | 10 Mb | 32 |
 | `full_v01` | 100,000 | 30 Mb | 64 |
@@ -26,7 +45,7 @@ paper's windows are made with `--preset full_v01`: 30 Mb and 64 individuals.
 `--n-samples` overrides the number of windows. Other options used often:
 
 | Option | Meaning |
-|---|---|
+|:---|:---|
 | `--out-dir FOLDER` | where to write the windows |
 | `--seed N` | random seed; the same seed gives the same windows on the same kind of machine |
 | `--workers N` | processes to use; -1 means all CPUs but one |
@@ -57,9 +76,9 @@ shard = np.load("simulations/samples/shard_00000.npz")
 row = 0
 lo, hi = shard["variant_offsets"][row], shard["variant_offsets"][row + 1]
 
-target    = shard["target_log10_ne"][row]              # (64,) true log10 Ne in each time interval
-positions = shard["variant_positions_bp"][lo:hi]       # positions of the variable sites
-packed    = shard["genotype_packed"][lo:hi]            # genotypes, 8 chromosome copies per byte
+target    = shard["target_log10_ne"][row]         # (64,) true log10 Ne in each time interval
+positions = shard["variant_positions_bp"][lo:hi]  # positions of the variable sites
+packed    = shard["genotype_packed"][lo:hi]       # genotypes, 8 chromosome copies per byte
 n_haplotypes = int(shard["n_haplotypes"][0])
 haplotypes = np.unpackbits(packed, axis=1, bitorder="little")[:, :n_haplotypes]
 ```
@@ -86,9 +105,11 @@ rates       = shard["obs_rec_rate"][rate_at[row]:rate_at[row + 1]]
 a published map's resolution, its errors and an error in its overall level.
 With `--include-truth`, a fixed 2% of the windows also hold `true_rec_*` and
 `true_mut_*`, the maps the sequence was actually simulated under; the others
-hold empty arrays, and `--truth-fraction 1` stores them for every window. Use
-the observed maps as input; the true ones are for measuring how much map
-errors matter.
+hold empty arrays, and `--truth-fraction 1` stores them for every window.
+
+> [!IMPORTANT]
+> Use the observed maps as input; the true ones are for measuring how much map
+> errors matter.
 
 ## What a window can be
 
@@ -97,8 +118,14 @@ history can appear with any map.
 
 ### Size histories
 
+<p align="center">
+  <img src="img/histories.png" width="840" alt="Twelve panels, one for each kind of size history, each with three example histories on log scales">
+  <br>
+  <sub>Three histories of each kind, drawn as <code>--preset full_v01</code> draws them.</sub>
+</p>
+
 | Kind | Share | What it is |
-|---|---|---|
+|:---|:---|:---|
 | `spectral_walk` | 0.200 | a smooth random history, whose roughness and range are drawn too |
 | `empirical_human_ne_template` | 0.190 | one of 191 histories inferred from real human data (SMC++, phlash, MSMC2, MSMC-IM), shifted, stretched and with noise added |
 | `size_event` | 0.100 | one change of size, which may be permanent |
@@ -120,7 +147,7 @@ does not read it and fits them like the other kinds.
 ### Maps
 
 | Kind | Share | What it is |
-|---|---|---|
+|:---|:---|:---|
 | `custom_heterogeneous` | 0.55 | synthetic: a smoothly varying rate with sharp recombination hotspots, matched to the deCODE map |
 | `empirical_map_slice` | 0.20 | a stretch of the real deCODE and Roulette maps, both taken from the same place in the genome |
 | `random_global_mu_r` | 0.15 | constant rates: recombination 0.3 to 3 times the baseline, mutation 0.5 to 2 times |
@@ -136,9 +163,14 @@ other; for the two constant kinds it is the true map.
 
 Windows other than `clean_constant_map` also carry invented variable sites,
 wrong genotype calls, missing calls and phasing mistakes, each at a rate
-drawn per window between a minimum and a maximum
-(`--false-variant-rate-per-bp-min/max`, `--genotype-error-min/max`,
-`--missing-rate-min/max`, `--phase-switch-rate-per-het-min/max`).
+drawn per window between a minimum and a maximum:
+
+| Error | Options |
+|:---|:---|
+| invented variable sites | `--false-variant-rate-per-bp-min`, `--false-variant-rate-per-bp-max` |
+| wrong genotype calls | `--genotype-error-min`, `--genotype-error-max` |
+| missing calls | `--missing-rate-min`, `--missing-rate-max` |
+| phasing mistakes | `--phase-switch-rate-per-het-min`, `--phase-switch-rate-per-het-max` |
 
 ## Simulating a history of your own
 
@@ -162,16 +194,19 @@ necast simulate --preset full_v01 --n-samples 100 --out-dir mine --seed 1 \
   --p-stdpopsim-single-pop 1 --stdpopsim-template-path my_history.csv
 ```
 
-Three things to know: a history whose sizes fall outside 100 to 1,000,000 is
-multiplied by one constant to fit (each window records the factor as
-`stdpopsim_ne_rescale`); a history whose largest size is more than 10,000
-times its smallest cannot be fitted and stops the run; and a table with
-several models gives each window one of them at random.
+Three things to know:
+
+- a history whose sizes fall outside 100 to 1,000,000 is multiplied by one
+  constant to fit (each window records the factor as `stdpopsim_ne_rescale`);
+- a history whose largest size is more than 10,000 times its smallest cannot
+  be fitted and stops the run;
+- a table with several models gives each window one of them at random.
 
 ## The data that ships with the package
 
 The maps and the inferred histories the simulator draws from are in
-`necast/third_party`; its README says where each came from.
+`necast/third_party`; its [README](../necast/third_party/README.md) says where
+each came from.
 
 ## Tests
 

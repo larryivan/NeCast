@@ -3,8 +3,9 @@ name: tests
 on: [push, pull_request]
 
 jobs:
-  necast:
+  tests:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -19,16 +20,5 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = Linux ]; then pip install torch --index-url https://download.pytorch.org/whl/cpu; fi
           pip install -e ".[simulate,dev]"
-      - run: python -m pytest tests --ignore=tests/simulator
+      - run: python -m pytest tests
       - run: necast example
-
-  simulator:
-    # some of its tests compare floats exactly with values recorded on Apple silicon
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -e ".[simulate,dev]"
-      - run: python -m pytest tests/simulator

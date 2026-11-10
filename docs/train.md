@@ -1,3 +1,5 @@
+[NeCast](../README.md) · [Guide](guide.md) · [Questions](faq.md) · [Simulating](simulate.md) · **Training**
+
 # Training the network
 
 NeCast comes with the network of the paper, so analysing data needs no
@@ -5,35 +7,61 @@ training. Train a network of your own only to change what it learns from:
 other histories, other maps, other error rates. The window length (30 Mb) and
 the number of individuals read (32) are fixed.
 
-```bash
-pip install "necast[simulate] @ git+https://github.com/larryivan/NeCast"
-necast simulate --preset full_v01 --n-samples 20000 --out-dir simulations
-necast train simulations --out trained
-necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 --out results --weights trained/necast.pt
-```
+## Quick start
+
+1. Install the simulator's packages:
+
+   ```bash
+   pip install "necast[simulate] @ git+https://github.com/larryivan/NeCast"
+   ```
+
+2. [Simulate](simulate.md) the windows to learn from:
+
+   ```bash
+   necast simulate --preset full_v01 --n-samples 20000 --out-dir simulations
+   ```
+
+3. Train a network on them:
+
+   ```bash
+   necast train simulations --out trained
+   ```
+
+4. Use it with `--weights`:
+
+   ```bash
+   necast run data.vcf.gz --mask accessible.bed --mu 1.25e-8 --rec-rate 1e-8 \
+     --weights trained/necast.pt --out results
+   ```
 
 The windows must be 30 Mb long and hold at least 32 individuals (`full_v01`
 has 64); NeCast reads 32 of them, the same 32 every time.
 
-Simulating is the slow part. The paper's 109,248 windows took about 80,000
-CPU-hours and 570 GB of disk, so 20,000 windows take about 15,000 CPU-hours
-and 100 GB; `--workers` sets how many processes simulate at once.
+> [!NOTE]
+> Simulating is the slow part. The paper's 109,248 windows took about 80,000
+> CPU-hours and 570 GB of disk, so 20,000 windows take about 15,000 CPU-hours
+> and 100 GB; `--workers` sets how many processes simulate at once.
 
 ## What `necast train` does
 
-**Prepare.** For every window it saves, in `trained/windows/`, the
-genotypes of its 32 individuals at the polymorphic sites, its maps, its
-summaries and its PSMC+ posterior: a few seconds a window with 16 CPU
-threads, and on average about 3 MB of disk. A run that stops can be started
-again and skips the windows already done. It knows windows only by name, so
-give each simulation folder its own `--out` folder. `--prepare-only` stops
-after this step, so it can run on a machine without a GPU; training
-afterwards (the same command without `--prepare-only`) reads the simulations
-again, so they must be on that machine too.
+### Prepare
 
-**Train.** 500 windows (a tenth, with fewer than 5,000 windows) are kept
-aside to pick the best epoch; the others are fitted. The recipe is the one
-the published network was trained with:
+For every window it saves, in `trained/windows/`, the genotypes of its 32
+individuals at the polymorphic sites, its maps, its summaries and its PSMC+
+posterior: a few seconds a window with 16 CPU threads, and on average about
+3 MB of disk. A run that stops can be started again and skips the windows
+already done. It knows windows only by name, so give each simulation folder
+its own `--out` folder.
+
+`--prepare-only` stops after this step, so it can run on a machine without a
+GPU; training afterwards (the same command without `--prepare-only`) reads
+the simulations again, so they must be on that machine too.
+
+### Train
+
+500 windows (a tenth, with fewer than 5,000 windows) are kept aside to pick
+the best epoch; the others are fitted. The recipe is the one the published
+network was trained with:
 
 - the summaries are normalised with the means and standard deviations of the
   fitted windows;
@@ -53,7 +81,7 @@ values and keeps other windows aside.
 ## What it writes
 
 | File | Contents |
-|---|---|
+|:---|:---|
 | `necast.pt` | the network of the epoch with the lowest validation error, for `necast run --weights` |
 | `training.tsv` | per epoch: learning rate, error on the fitted windows, error on the windows kept aside, seconds |
 | `windows/` | the prepared windows |
@@ -65,7 +93,8 @@ reached 0.296 on its 500 validation windows.
 ## The paper's training data
 
 The 109,248 simulated windows behind the published network, with their
-summaries and the splits used, are at
-https://huggingface.co/datasets/Larrivhan/NeCast-simulations. They were made by
-the simulator at git tag `corpus-generator`; the current simulator gives the
-same windows except those whose maps are slices of the real maps (a fifth).
+summaries and the splits used, are on Hugging Face:
+[NeCast-simulations](https://huggingface.co/datasets/Larrivhan/NeCast-simulations).
+They were made by the simulator at git tag `corpus-generator`; the current
+simulator gives the same windows except those whose maps are slices of the
+real maps (a fifth).

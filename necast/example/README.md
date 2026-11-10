@@ -5,7 +5,7 @@ history is known. `necast example` runs NeCast on it and compares the result
 with the truth and with `expected.tsv`.
 
 | File | Contents |
-|---|---|
+|:---|:---|
 | `example.vcf.gz`, `.tbi` | genotypes of 32 individuals, unphased, with some missing calls |
 | `mask.bed` | the accessible sequence: the whole window |
 | `recombination.bed.gz` | recombination map, in cM/Mb |

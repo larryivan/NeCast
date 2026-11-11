@@ -251,7 +251,7 @@ def test_the_frozen_catalogue_matches_the_published_event_table() -> None:
     ``necast/third_party/histories/build_stdpopsim_single_pop.py`` reads whichever stdpopsim happens
     to be installed at build time, so nothing in the data file proves it is
     right.  ``_canonical_zigzag_1s14`` is the Schiffels & Durbin table typed in
-    by hand from the paper, and it has to agree with the frozen entry exactly.
+    by hand from the paper, and it has to agree with the frozen entry.
     """
 
     cfg = Config()
@@ -265,7 +265,8 @@ def test_the_frozen_catalogue_matches_the_published_event_table() -> None:
         if template.model_id == "Zigzag_1S14"
     )
     np.testing.assert_array_equal(np.asarray(frozen.breaks), np.asarray(breaks))
-    np.testing.assert_array_equal(np.asarray(frozen.values), np.asarray(values))
+    # the sizes are computed here and in the build script, so they agree to rounding
+    np.testing.assert_allclose(np.asarray(frozen.values), np.asarray(values), rtol=1e-12)
     np.testing.assert_array_equal(
         np.asarray(frozen.growth_rates),
         np.asarray(meta["demography_growth_rates"]),

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -269,113 +268,21 @@ def test_stdpopsim_target_resolution_does_not_change_model_or_simulation_seed(
     assert target64.shape == (64,)
 
 
-def _trajectory_hash(
-    breaks: list[float],
-    values: list[float],
-    growth_rates: list[float],
-) -> str:
-    digest = hashlib.sha256()
-    for items in (breaks, values, growth_rates):
-        array = np.asarray(items, dtype="<f8")
-        digest.update(np.asarray([array.size], dtype="<u8").tobytes(order="C"))
-        digest.update(array.tobytes(order="C"))
-    return digest.hexdigest()
+PINNED = json.loads((Path(__file__).parent / "latent_histories.json").read_text())
 
 
-@pytest.mark.parametrize(
-    ("recipe", "seed", "expected_hash", "expected_tail"),
-    [
-        (
-            "bottleneck",
-            830_001,
-            "70b639b73c9625ec5ef906a8e0055e957a6892cfe6250e70a82c0556f6c85be5",
-            17_656_288_953_729_531_408,
-        ),
-        (
-            "constant",
-            830_001,
-            "4e5cf9c3bcc7ef9cc8bb48c7ab4802b3da9155508bd9e41f77ad497ffece37fa",
-            12_215_142_104_914_073_923,
-        ),
-        (
-            "empirical_human_ne_template",
-            830_001,
-            "3887f17b0e7f640d4b899e57157f313bb91a4c62eff9849b40209f1dbdb55947",
-            6_711_622_359_113_815_556,
-        ),
-        (
-            "event_on_background",
-            830_001,
-            "ac2ca4238a86c4d7997f04bba9edd40503304ba31b4b5e30c547328395c134d0",
-            1_791_161_688_086_831_483,
-        ),
-        (
-            "exponential",
-            830_001,
-            "ded50d0cf62a2014618688b97f45e6f7c23c773bca484c51bb69c35006e1d248",
-            11_741_280_483_675_874_754,
-        ),
-        (
-            "literature_sawtooth",
-            830_001,
-            "a36bf2b88c4f3820f5b65fb36e68fb9de5f0d3f3db210543cca4f97413fef756",
-            6_088_537_202_534_173_187,
-        ),
-        (
-            "multi_event",
-            830_001,
-            "d7e8a8310ea3d3a05c38772af19e9595385063b05f1e1928a143cbc339a0c233",
-            16_161_667_349_681_506_290,
-        ),
-        (
-            "ooa_chain",
-            830_001,
-            "42b256f2f267d84e5e2512be52a0fc1f6b5e1aa57f0656a358825d6a5368326d",
-            14_361_798_432_631_189_947,
-        ),
-        (
-            "sawtooth",
-            830_001,
-            "ac5b75ae0f99ae1011f3d044a5294594b6bff86693db72936174c4441ecca331",
-            9_737_454_704_092_519_409,
-        ),
-        (
-            "size_event",
-            830_001,
-            "c435c005291ef1914244545f9e34254f3f2676b40be18a0c59a81af191554f2d",
-            10_801_209_010_986_097_841,
-        ),
-        (
-            "spectral_walk",
-            830_001,
-            "7f1579fa7c95f1ef917b2947e059b9052effb7fef5fd15ee3af94679ae9d0b75",
-            12_005_372_267_971_068_725,
-        ),
-        (
-            "stdpopsim_single_pop",
-            830_001,
-            "35dbe4e6be41c2b07689b21ae28086d84478a05c16c1737791afc943d6de362c",
-            12_215_142_104_914_073_923,
-        ),
-    ],
-)
-def test_latent_histories_are_pinned(
-    # Nine of these twelve are byte-identical to the goldens taken before
-    # histories became functions of continuous time, random-number tails
-    # included, which is the evidence that the change reached only what it was
-    # aimed at.  The three that moved are the three that were being evaluated on
-    # a grid: ``spectral_walk`` and ``event_on_background`` keep their tails and
-    # changed only where their epochs fall, and ``empirical_human_ne_template``
-    # draws its perturbation per template knot instead of per label bin, which
-    # is a different number of draws and so a different tail.
-    recipe: str,
-    seed: int,
-    expected_hash: str,
-    expected_tail: int,
-) -> None:
+@pytest.mark.parametrize("recipe", sorted(PINNED))
+def test_latent_histories_are_pinned(recipe: str) -> None:
+    # One history per recipe, drawn with a fixed seed, against the values in
+    # latent_histories.json.  Machines differ in the last bit of a float, and
+    # with it in where one epoch boundary of a smooth curve falls, so a history
+    # is compared as its 64-interval target, the label the simulator writes, to
+    # 1e-5; Apple silicon and Linux on x86-64 differ by 5e-7 at most.  The
+    # random-number tail is the same on both and is compared exactly: it pins
+    # the number and the order of the draws.
     cfg = Config()
     edges, mids = time_grid(cfg)
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(830_001)
 
     breaks, values, meta = DEMO_SAMPLERS[recipe](rng, cfg, edges, mids)
     breaks, values, growth_rates = _clean_demography(
@@ -383,13 +290,14 @@ def test_latent_histories_are_pinned(
         values,
         meta.get("demography_growth_rates"),
         # Mirror the production path: the band a sampler is clipped to is part
-        # of what the golden pins, so reading it here would silently test the
-        # regular band for a stress recipe.
+        # of what is pinned, so reading it here would silently test the regular
+        # band for a stress recipe.
         stress="stress" in recipe,
     )
 
-    assert _trajectory_hash(breaks, values, growth_rates) == expected_hash
-    assert int(rng.bit_generator.random_raw()) == expected_tail
+    target = bin_average_log10_ne(edges, breaks, values, growth_rates)
+    np.testing.assert_allclose(target, PINNED[recipe]["target"], rtol=0, atol=1e-5)
+    assert int(rng.bit_generator.random_raw()) == PINNED[recipe]["tail"]
 
 
 # --------------------------------------------------------------------------
